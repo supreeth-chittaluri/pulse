@@ -153,7 +153,7 @@ News front page, and three per-ticker Google News queries.
 | --- | --- | --- | --- |
 | **M0** | Verify + scaffold | Worker prints raw posts from one subreddit; `GET /health` returns 200 | ✅ done |
 | **M1** | Ingestion pipeline | Two consecutive runs create no duplicate rows; a scheduled run fires unattended | ✅ done |
-| **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | ✅ code done, eval pending labels |
+| **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | ✅ live; eval awaiting labels |
 | **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | next |
 | **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | |
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | |
@@ -205,14 +205,20 @@ listed symbols proposes candidates; the model only judges whether each candidate
 is really a ticker mention in context and how the post feels about it.
 
 A post with no candidate ticker is marked scored with zero signals and **never
-reaches the model**. Measured on the first 575 real ingested posts:
+reaches the model**. Measured over the first full scoring run of 575 real posts:
 
 | | |
 |---|---:|
 | Posts considered | 575 |
 | Filtered out locally, zero quota | 258 (45%) |
 | Sent to the model | 317 |
-| Requests needed (batch size 15) | **22** |
+| **Requests used** | **22** of 500/day |
+| Signals produced | 331 across 91 tickers |
+| Failures | 0 |
+| Mean request latency | 5.3s (max 8.2s), 15 posts each |
+| Tokens in / out | 62,828 / 41,549 |
+
+Sentiment split: 168 bullish, 64 bearish, 99 neutral; mean confidence 0.78.
 
 The allowlist comes from the SEC's [`company_tickers.json`](https://www.sec.gov/files/company_tickers.json)
 (committed to the repo, refresh with `node scripts/refresh-tickers.ts`). That
@@ -261,6 +267,26 @@ per day — under 10% of the daily quota.
 > billing-off project. And on the free tier Google's terms permit using submitted
 > prompts to improve their models; everything pulse sends is already-public
 > Reddit/HN/news text, but the tradeoff is real.
+
+### Measuring it
+
+`npm run eval:export` writes a stratified sample of scored posts to
+`eval/labels.jsonl` as a labeling worksheet. **The model's own predictions are
+deliberately excluded from that file**: labels anchored on what the model
+already said would mostly measure agreement with itself, and since the same
+author wrote the prompt, that circularity would be invisible in the final
+number.
+
+Fill in `label_is_ticker` and `label_sentiment`, then:
+
+```bash
+npm run eval:scoring            # re-score the labeled posts and grade (~2 requests)
+npm run eval:scoring -- --stored  # grade the stored signals instead (0 quota)
+```
+
+It reports ticker-mention precision/recall/F1, sentiment sign agreement over a
+±0.2 neutral band, mean absolute error, and lists every disagreement so a bad
+number points at specific posts rather than a vibe.
 
 ### Validation is ours, not the provider's
 
