@@ -1,11 +1,12 @@
 # pulse
 
 Detects unusual sentiment spikes for US equities by continuously ingesting
-retail and news chatter, scoring it with Claude, and comparing each ticker
+retail and news chatter, scoring it with an LLM, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M1 complete.** Scheduled, deduped ingestion into Postgres.
-> Sentiment scoring is next — see the milestone plan below.
+> **Status: M2 complete.** Scheduled deduped ingestion, plus on-demand
+> sentiment scoring on Gemini's free tier. Spike detection is next — see the
+> milestone plan below.
 
 ---
 
@@ -25,7 +26,7 @@ flags statistical deviations from it.
 | Runtime | Node 22+ (uses native TypeScript type-stripping — no build step) |
 | Database | Postgres 17 |
 | Ingestion | RSS/Atom + Reddit OAuth, behind one `Source` interface |
-| Scoring | Claude (`claude-haiku-4-5`) with structured output |
+| Scoring | Gemini Flash (`gemini-3.5-flash`) structured output, free tier |
 | API | Express 5 |
 | Tests | Vitest |
 
@@ -152,13 +153,13 @@ News front page, and three per-ticker Google News queries.
 | --- | --- | --- | --- |
 | **M0** | Verify + scaffold | Worker prints raw posts from one subreddit; `GET /health` returns 200 | ✅ done |
 | **M1** | Ingestion pipeline | Two consecutive runs create no duplicate rows; a scheduled run fires unattended | ✅ done |
-| **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | next |
-| **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | |
+| **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | ✅ code done, eval pending labels |
+| **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | next |
 | **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | |
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | |
 | **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | |
 | **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | |
-| **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Claude, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
+| **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
 | **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
 
 ## How ingestion runs
@@ -186,14 +187,91 @@ chance of two Reddit fetches overlapping.
   platform with a 30s kill grace to hard-kill the worker mid-fetch. A second
   signal exits immediately.
 
+## Sentiment scoring (M2)
+
+Scoring runs **on demand only** — never on a schedule. The Gemini free tier is a
+fixed daily request quota rather than a bill, so consuming it should be a
+deliberate act.
+
+```bash
+npm run worker -- score-once --dry-run   # what would be sent; calls nothing
+npm run worker -- score-once --limit 60  # actually score
+```
+
+### Two halves, and only one of them costs quota
+
+Ticker extraction is **not** the model's job. A regex plus an allowlist of real
+listed symbols proposes candidates; the model only judges whether each candidate
+is really a ticker mention in context and how the post feels about it.
+
+A post with no candidate ticker is marked scored with zero signals and **never
+reaches the model**. Measured on the first 575 real ingested posts:
+
+| | |
+|---|---:|
+| Posts considered | 575 |
+| Filtered out locally, zero quota | 258 (45%) |
+| Sent to the model | 317 |
+| Requests needed (batch size 15) | **22** |
+
+The allowlist comes from the SEC's [`company_tickers.json`](https://www.sec.gov/files/company_tickers.json)
+(committed to the repo, refresh with `node scripts/refresh-tickers.ts`). That
+file contains **operating companies only, no ETFs**, so a short curated ETF list
+is merged in — otherwise SPY, QQQ and IWM, three of the most-discussed symbols
+on these subreddits, would be invisible to the extractor. A stoplist suppresses
+real symbols that are ordinary words in context (`DD`, `IT`, `OPEN`, `A`) unless
+written as an explicit cashtag.
+
+### Staying inside a quota nobody publishes
+
+Google no longer publishes per-model free-tier limits in its docs — they are
+project-specific and shown only at
+[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit).
+So the worker does not assume a number:
+
+- **Client-side throttle.** Gemini shares the same `MinIntervalGate` used for
+  Reddit, defaulting to one request per 6s (10 RPM).
+- **Hard local daily ceiling.** `GEMINI_DAILY_REQUEST_BUDGET` (default 200) is
+  checked against `llm_requests` rows before each request, counted over the
+  **Pacific** day, because that is when Google's quota resets.
+- **Provider 429s stop the run** rather than hammering a spent quota.
+
+At ~500–1000 ingested posts/day, steady-state scoring is roughly 20–40 requests
+per day — far inside any plausible free-tier ceiling.
+
+> **Two free-tier caveats worth knowing.** Enabling billing on the Google Cloud
+> project **removes the free tier for that project entirely** — keep the key on a
+> billing-off project. And on the free tier Google's terms permit using submitted
+> prompts to improve their models; everything pulse sends is already-public
+> Reddit/HN/news text, but the tradeoff is real.
+
+### Validation is ours, not the provider's
+
+Gemini's structured output honours only a **subset** of JSON Schema — notably it
+does not enforce numeric `minimum`/`maximum`. So the API schema constrains shape
+only, and every bound is re-checked locally with Zod. On top of the schema:
+
+- **post_id alignment.** The set of ids returned must exactly match the set sent.
+  Batching 15 posts invites the model to drop, duplicate or invent an entry, and
+  a shuffled result would attach one post's sentiment to another post's row with
+  nothing downstream able to notice.
+- **Hallucinated tickers are dropped.** A symbol that was never offered as a
+  candidate is discarded, not stored.
+- **Batch failure degrades gracefully.** An invalid batch response is retried one
+  post per request, so one bad entry cannot cost fourteen good posts.
+- **Atomic writes.** Signals and `scored_at` commit in one transaction, so a
+  crash can never mark a post scored with no signals.
+- **Poison posts drop out.** Three failed attempts and a post leaves the queue.
+
 ## Cost
 
-Nothing in M0 or M1 calls a paid API.
+Nothing in pulse calls a paid API. Ingestion is public RSS; scoring is Gemini's
+free tier.
 
 | Service | Cost | From |
 | --- | --- | --- |
 | RSS sources (Reddit, HN, Google News) | free | M0 |
 | Reddit OAuth, non-commercial | free ≤100 QPM | if approved |
-| Claude `claude-haiku-4-5` | metered; cut hard by batching, prompt caching, and the Batch API | M2 |
+| Gemini Flash | **$0** — free tier, no card. See the scoring section for how we stay inside the quota | M2 |
 | Twilio | ~$1.15/mo number + ~$0.008/SMS | M7 |
 | Hosting (Neon, Render, Vercel free tiers) | free | M8 |
