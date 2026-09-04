@@ -4,7 +4,7 @@ import { systemClock, type Clock, type Source } from '@pulse/sources';
 export type SchedulerOptions = {
   sources: Source[];
   /** What to do when a source comes due. Injected so tests need no network. */
-  run: (source: Source) => Promise<unknown>;
+  run: (source: Source, signal?: AbortSignal) => Promise<unknown>;
   logger: Logger;
   clock?: Clock;
   /** Fetch everything once at startup instead of waiting out the first interval. */
@@ -117,9 +117,12 @@ export async function runScheduler(options: SchedulerOptions): Promise<void> {
 
     let lastError: string | null = null;
     try {
-      await run(next.source);
+      await run(next.source, signal);
       next.consecutiveFailures = 0;
     } catch (err) {
+      // A run interrupted by shutdown is not a failure of the source, and must
+      // not leave a bogus backoff behind for the next start.
+      if (signal?.aborted) break;
       // Already logged in detail by the ingest step; one source failing must
       // never stop the loop.
       next.consecutiveFailures += 1;

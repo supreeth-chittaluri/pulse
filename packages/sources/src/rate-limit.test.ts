@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MinIntervalGate, type Clock } from './rate-limit.ts';
+import { AbortedError, MinIntervalGate, systemClock, type Clock } from './rate-limit.ts';
 
 /**
  * Virtual clock: sleeps advance time instantly, so we assert the gate's
@@ -116,6 +116,40 @@ describe('MinIntervalGate', () => {
     clock.time += 100_000;
     expect(gate.waitTimeMs('reddit')).toBe(0);
     expect(gate.waitTimeMs(null)).toBe(0);
+  });
+
+  it('gives up a long wait promptly when aborted', async () => {
+    // Real timers here on purpose: the point is that a pending setTimeout is
+    // actually cancelled, which a virtual clock cannot demonstrate.
+    const gate = new MinIntervalGate(60_000, systemClock);
+    const controller = new AbortController();
+
+    await gate.acquire('reddit');
+    const startedAt = Date.now();
+    const pending = gate.acquire('reddit', controller.signal);
+    setTimeout(() => controller.abort(), 20);
+
+    await expect(pending).rejects.toThrow(AbortedError);
+    // Would have been 60s before the signal was threaded through.
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it('refuses immediately when the signal is already aborted', async () => {
+    const gate = new MinIntervalGate(60_000, systemClock);
+    await expect(gate.acquire('reddit', AbortSignal.abort())).rejects.toThrow(AbortedError);
+  });
+
+  it('does not let an aborted caller claim the bucket', async () => {
+    const gate = new MinIntervalGate(60_000, systemClock);
+    const controller = new AbortController();
+
+    const pending = gate.acquire('reddit', controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toThrow(AbortedError);
+
+    // The aborted caller never issued a request, so the next one must not be
+    // made to wait out an interval on its behalf.
+    expect(gate.waitTimeMs('reddit')).toBe(0);
   });
 
   it('rejects a negative interval', () => {

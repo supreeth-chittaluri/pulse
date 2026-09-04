@@ -185,6 +185,43 @@ describe('runScheduler', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('passes its abort signal to run', async () => {
+    let seen: AbortSignal | undefined;
+    const controller = new AbortController();
+
+    await runScheduler({
+      sources: [fakeSource('a', 600)],
+      logger: silentLogger,
+      clock: testClock(),
+      signal: controller.signal,
+      run: async (_source, signal) => {
+        seen = signal;
+        controller.abort();
+      },
+    });
+
+    expect(seen).toBe(controller.signal);
+  });
+
+  it('does not treat a run interrupted by shutdown as a source failure', async () => {
+    const warn = vi.fn();
+    const controller = new AbortController();
+
+    await runScheduler({
+      sources: [fakeSource('a', 600)],
+      logger: { ...silentLogger, warn },
+      clock: testClock(),
+      signal: controller.signal,
+      run: async () => {
+        controller.abort();
+        throw new Error('Aborted while waiting on rate-limit bucket "reddit"');
+      },
+    });
+
+    // A backoff logged here would be wrong: the source did not fail, we quit.
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('returns immediately when there are no sources', async () => {
     const warn = vi.fn();
     await runScheduler({

@@ -29,7 +29,11 @@ export type IngestResult = {
  * ingest_runs row is always closed out first, so a failing feed is visible in
  * the database and not only in the logs.
  */
-export async function ingestSource(deps: IngestDeps, source: Source): Promise<IngestResult> {
+export async function ingestSource(
+  deps: IngestDeps,
+  source: Source,
+  signal?: AbortSignal,
+): Promise<IngestResult> {
   const { pool, gate, logger } = deps;
 
   const waitMs = gate.waitTimeMs(source.rateLimitBucket);
@@ -40,7 +44,9 @@ export async function ingestSource(deps: IngestDeps, source: Source): Promise<In
       waitMs,
     });
   }
-  await gate.acquire(source.rateLimitBucket);
+  // Throws AbortedError if we are shutting down, before any ingest_runs row
+  // is opened -- so an interrupted wait leaves no half-finished record.
+  await gate.acquire(source.rateLimitBucket, signal);
 
   const startedAt = Date.now();
   const runId = await startRun(pool, source.id, source.adapter);

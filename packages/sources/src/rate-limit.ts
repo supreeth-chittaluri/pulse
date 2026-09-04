@@ -4,13 +4,35 @@
  */
 export type Clock = {
   now(): number;
-  sleep(ms: number): Promise<void>;
+  /** Resolves early (not rejecting) if `signal` aborts while waiting. */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
 };
 
 export const systemClock: Clock = {
   now: () => Date.now(),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (ms, signal) =>
+    new Promise<void>((resolve) => {
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      const finish = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      signal?.addEventListener('abort', finish, { once: true });
+    }),
 };
+
+/** Thrown by `acquire` when the caller is aborted before its turn comes up. */
+export class AbortedError extends Error {
+  constructor(bucket: string) {
+    super(`Aborted while waiting on rate-limit bucket "${bucket}"`);
+    this.name = 'AbortedError';
+  }
+}
 
 /**
  * Enforces a minimum gap between requests sharing a bucket.
@@ -39,17 +61,25 @@ export class MinIntervalGate {
   /**
    * Resolves once the caller is clear to issue a request. A null bucket means
    * "unlimited" and resolves immediately.
+   *
+   * The wait can be minutes long, so it honours `signal`: without it a SIGTERM
+   * during a gate wait would sit unanswered until the interval elapsed, and a
+   * deploy platform with a 30s kill grace would hard-kill the worker mid-fetch.
    */
-  async acquire(bucket: string | null): Promise<void> {
+  async acquire(bucket: string | null, signal?: AbortSignal): Promise<void> {
     if (bucket === null) return;
+    if (signal?.aborted) throw new AbortedError(bucket);
 
     const prior = this.#chains.get(bucket) ?? Promise.resolve();
     const turn = prior.then(async () => {
       const last = this.#lastAcquiredAt.get(bucket);
       if (last !== undefined) {
         const waitMs = this.minIntervalMs - (this.#clock.now() - last);
-        if (waitMs > 0) await this.#clock.sleep(waitMs);
+        if (waitMs > 0) await this.#clock.sleep(waitMs, signal);
       }
+      // An aborted caller must not claim the bucket, or the next caller would
+      // wait out an interval for a request that never happened.
+      if (signal?.aborted) throw new AbortedError(bucket);
       this.#lastAcquiredAt.set(bucket, this.#clock.now());
     });
 

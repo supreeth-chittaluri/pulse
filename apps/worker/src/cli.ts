@@ -180,7 +180,7 @@ async function run(pool: Pool, sources: Source[], logger: Logger): Promise<numbe
     logger,
     signal: controller.signal,
     runImmediately: true,
-    run: (source) => ingestSource({ pool, gate, logger }, source),
+    run: (source, signal) => ingestSource({ pool, gate, logger }, source, signal),
   });
 
   return 0;

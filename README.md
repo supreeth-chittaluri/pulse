@@ -179,8 +179,12 @@ chance of two Reddit fetches overlapping.
   retry per hour by its third failure.
 - **Jitter** of ±10% keeps sources from converging into a thundering herd after
   a restart.
-- **Shutdown**: SIGINT/SIGTERM finish the current fetch and exit; sleeps are
-  chunked at 500ms so shutdown never waits out a full interval.
+- **Shutdown**: SIGINT/SIGTERM finish the current fetch and exit. The
+  scheduler's own sleeps are chunked at 500ms, and the rate-limit gate's wait
+  takes the same abort signal — without that, a SIGTERM arriving during a 60s
+  gate wait sat unanswered for the rest of the interval, long enough for a
+  platform with a 30s kill grace to hard-kill the worker mid-fetch. A second
+  signal exits immediately.
 
 ## Cost
 
