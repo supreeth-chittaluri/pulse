@@ -1,0 +1,12 @@
+{
+  "name": "@pulse/sources",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@pulse/core": "*",
+    "fast-xml-parser": "^5.0.0",
+    "zod": "^4.0.0"
+  }
+}
