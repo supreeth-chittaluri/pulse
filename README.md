@@ -26,7 +26,7 @@ flags statistical deviations from it.
 | Runtime | Node 22+ (uses native TypeScript type-stripping — no build step) |
 | Database | Postgres 17 |
 | Ingestion | RSS/Atom + Reddit OAuth, behind one `Source` interface |
-| Scoring | Gemini Flash (`gemini-3.5-flash`) structured output, free tier |
+| Scoring | Gemini Flash Lite (`gemini-3.5-flash-lite`) structured output, free tier |
 | API | Express 5 |
 | Tests | Vitest |
 
@@ -222,22 +222,39 @@ on these subreddits, would be invisible to the extractor. A stoplist suppresses
 real symbols that are ordinary words in context (`DD`, `IT`, `OPEN`, `A`) unless
 written as an explicit cashtag.
 
-### Staying inside a quota nobody publishes
+### Staying inside the quota
 
 Google no longer publishes per-model free-tier limits in its docs — they are
-project-specific and shown only at
+project-specific and visible only at
 [aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit).
-So the worker does not assume a number:
+Read yours before changing anything below. Ours, measured 2026-09-04:
 
-- **Client-side throttle.** Gemini shares the same `MinIntervalGate` used for
-  Reddit, defaulting to one request per 6s (10 RPM).
-- **Hard local daily ceiling.** `GEMINI_DAILY_REQUEST_BUDGET` (default 200) is
-  checked against `llm_requests` rows before each request, counted over the
-  **Pacific** day, because that is when Google's quota resets.
+| Model | RPM | TPM | **RPD** |
+|---|---:|---:|---:|
+| `gemini-3.5-flash` | 5 | 250K | **20** |
+| `gemini-3.5-flash-lite` | 15 | 250K | **500** |
+
+Widely-cited third-party guides claimed ~1,500 RPD for Flash. The real figure
+for this project is **20** — off by 75×. Do not size anything off a blog post.
+
+That gap decides the model: Flash's 20 requests/day cannot clear even a single
+22-request backlog, so scoring runs on **Flash Lite**. Sentiment classification
+on short posts sits comfortably in Lite's range.
+
+The guardrails, in the same order they fire:
+
+- **Client-side throttle.** Gemini shares the `MinIntervalGate` built for
+  Reddit, at one request per 4s — Flash Lite's 15 RPM ceiling exactly.
+- **Hard local daily ceiling.** `GEMINI_DAILY_REQUEST_BUDGET` (400, under the
+  real 500) is checked against `llm_requests` before every request, counted over
+  the **Pacific** day because that is when Google's quota resets.
 - **Provider 429s stop the run** rather than hammering a spent quota.
 
+TPM is not a constraint at our size: a 15-post batch is roughly 4–5K tokens, so
+even at the full 15 RPM we use about 70K of the 250K TPM allowance.
+
 At ~500–1000 ingested posts/day, steady-state scoring is roughly 20–40 requests
-per day — far inside any plausible free-tier ceiling.
+per day — under 10% of the daily quota.
 
 > **Two free-tier caveats worth knowing.** Enabling billing on the Google Cloud
 > project **removes the free tier for that project entirely** — keep the key on a

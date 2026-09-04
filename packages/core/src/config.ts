@@ -17,9 +17,9 @@ const envSchema = z.object({
 
   // M2+, unused in M0/M1.
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
-  GEMINI_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(6_000),
-  GEMINI_DAILY_REQUEST_BUDGET: z.coerce.number().int().positive().default(200),
+  GEMINI_MODEL: z.string().default('gemini-3.5-flash-lite'),
+  GEMINI_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(4_000),
+  GEMINI_DAILY_REQUEST_BUDGET: z.coerce.number().int().positive().default(400),
   SCORING_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(15),
 });
 

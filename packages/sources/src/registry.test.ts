@@ -12,7 +12,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     userAgent: 'pulse-test/0.1',
     redditOAuthEnabled: false,
     reddit: {},
-    gemini: { model: 'gemini-3.5-flash', minIntervalMs: 6_000, dailyRequestBudget: 200 },
+    gemini: { model: 'gemini-3.5-flash-lite', minIntervalMs: 4_000, dailyRequestBudget: 400 },
     scoring: { batchSize: 15 },
     ...overrides,
   };
