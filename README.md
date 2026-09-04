@@ -4,9 +4,8 @@ Detects unusual sentiment spikes for US equities by continuously ingesting
 retail and news chatter, scoring it with Claude, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M0 complete.** Scaffold, schema, source abstraction, and a working
-> ingestion read path. Nothing is persisted or scored yet — see the milestone
-> plan below.
+> **Status: M1 complete.** Scheduled, deduped ingestion into Postgres.
+> Sentiment scoring is next — see the milestone plan below.
 
 ---
 
@@ -50,12 +49,19 @@ npm run db:up             # Postgres 17 in Docker, host port 5433
 npm run db:migrate
 ```
 
-Verify ingestion:
+Ingest:
 
 ```bash
-npm run worker -- list-sources
-npm run worker -- fetch-once --source reddit:wallstreetbets --limit 5
+npm run worker -- list-sources                 # what is configured, and via which adapter
+npm run worker -- fetch-once --source reddit:stocks --limit 5   # print only, writes nothing
+npm run worker -- ingest-once                  # one pass over every source, writes to Postgres
+npm run worker -- run                          # poll on schedule until Ctrl-C
+npm run worker -- status                       # stored counts and the last run per source
 ```
+
+`ingest-once` paces itself through the Reddit gate, so a full pass takes about
+four minutes: five Reddit sources at one request per minute. That is expected,
+not a hang.
 
 Verify the API:
 
@@ -68,7 +74,7 @@ curl localhost:3000/health
 Tests and typecheck:
 
 ```bash
-npm test
+npm test          # needs `npm run db:up`; DB-backed tests skip loudly without it
 npm run typecheck
 ```
 
@@ -111,9 +117,11 @@ budgets roughly one request per minute. Three back-to-back fetches of different
 subreddits produced a 429 during M0 testing. Consequences:
 
 - Reddit adapters retry with 8s/16s/32s backoff, not the 1s/2s/4s default.
-- `config/sources.json` enforces a 300s floor on Reddit `pollSeconds` (tested).
-- **M1 must serialize Reddit fetches behind a single global token bucket.**
-  Polling five subreddits concurrently every 5 minutes will get throttled.
+- Every Reddit source declares `rateLimitBucket: 'reddit'` and queues behind a
+  shared `MinIntervalGate` at one request per 60s (M1).
+- Reddit sources poll at 600s, so five subreddits land near one Reddit request
+  per 120s — inside budget with headroom for retries. `config/sources.json`
+  enforces a floor, and a test pins it.
 
 ## Schema
 
@@ -126,6 +134,9 @@ mention several tickers and dedupe keys on the *post*. So:
 - **`signals`** — one row per (post × ticker), written by M2. A post mentioning
   NVDA and AMD produces two signals.
 - **`baselines`**, **`watchlist`**, **`users`** — as specified.
+- **`ingest_runs`** (M1, also not in the spec) — one row per fetch attempt, with
+  counts and any error. Makes unattended runs observable, is the source of M9's
+  posts/day metric, and will back last-run reporting on `/health`.
 
 ## Configuration
 
@@ -140,8 +151,8 @@ News front page, and three per-ticker Google News queries.
 | # | Milestone | Acceptance | Status |
 | --- | --- | --- | --- |
 | **M0** | Verify + scaffold | Worker prints raw posts from one subreddit; `GET /health` returns 200 | ✅ done |
-| **M1** | Ingestion pipeline | Two consecutive runs create no duplicate rows; a scheduled run fires unattended | next |
-| **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | |
+| **M1** | Ingestion pipeline | Two consecutive runs create no duplicate rows; a scheduled run fires unattended | ✅ done |
+| **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | next |
 | **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | |
 | **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | |
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | |
@@ -149,6 +160,27 @@ News front page, and three per-ticker Google News queries.
 | **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | |
 | **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Claude, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
 | **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
+
+## How ingestion runs
+
+`npm run worker -- run` polls every source on its own interval, **serially**.
+Nine sources at about a second each is nothing, and serial execution removes any
+chance of two Reddit fetches overlapping.
+
+- **Dedupe** is the database's job: a batched
+  `INSERT ... ON CONFLICT (source, source_post_id) DO NOTHING RETURNING id`.
+  No read-then-write, so re-running ingestion is a no-op and concurrent workers
+  cannot race.
+- **Pacing** is the `MinIntervalGate`'s job. Sources sharing a bucket queue
+  behind each other; unrelated sources pass straight through.
+- **Failure isolation**: one source throwing never stops the loop. It backs off
+  exponentially (interval × 2^failures, capped at 1h) and returns to its normal
+  cadence on the next success. At a 600s interval a dead feed settles at one
+  retry per hour by its third failure.
+- **Jitter** of ±10% keeps sources from converging into a thundering herd after
+  a restart.
+- **Shutdown**: SIGINT/SIGTERM finish the current fetch and exit; sleeps are
+  chunked at 500ms so shutdown never waits out a full interval.
 
 ## Cost
 
