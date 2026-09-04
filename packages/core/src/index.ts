@@ -16,3 +16,15 @@ export {
   type FinishRunInput,
   type LastRun,
 } from './repositories/runs.ts';
+export {
+  selectUnscoredPosts,
+  countUnscoredPosts,
+  writeScores,
+  recordScoreFailure,
+  recordLlmRequest,
+  countRequestsToday,
+  countSignals,
+  type UnscoredPost,
+  type SignalInput,
+  type LlmRequestRecord,
+} from './repositories/signals.ts';
