@@ -1,11 +1,11 @@
 {
   "_comment": "Ingestion sources. Edit freely -- no code change needed. Reddit entries use the public .rss adapter until REDDIT_CLIENT_ID/SECRET are set in .env, then switch to OAuth automatically. pollSeconds has a 60s floor; Reddit rate-limits a single .rss feed to roughly one fetch per minute, so stay at 300+.",
   "sources": [
-    { "kind": "reddit", "id": "reddit:wallstreetbets", "subreddit": "wallstreetbets", "listing": "new", "limit": 50, "pollSeconds": 300, "enabled": true },
-    { "kind": "reddit", "id": "reddit:stocks", "subreddit": "stocks", "listing": "new", "limit": 50, "pollSeconds": 300, "enabled": true },
-    { "kind": "reddit", "id": "reddit:investing", "subreddit": "investing", "listing": "new", "limit": 50, "pollSeconds": 300, "enabled": true },
-    { "kind": "reddit", "id": "reddit:options", "subreddit": "options", "listing": "new", "limit": 50, "pollSeconds": 300, "enabled": true },
-    { "kind": "reddit", "id": "reddit:StockMarket", "subreddit": "StockMarket", "listing": "new", "limit": 50, "pollSeconds": 300, "enabled": true },
+    { "kind": "reddit", "id": "reddit:wallstreetbets", "subreddit": "wallstreetbets", "listing": "new", "limit": 50, "pollSeconds": 600, "enabled": true },
+    { "kind": "reddit", "id": "reddit:stocks", "subreddit": "stocks", "listing": "new", "limit": 50, "pollSeconds": 600, "enabled": true },
+    { "kind": "reddit", "id": "reddit:investing", "subreddit": "investing", "listing": "new", "limit": 50, "pollSeconds": 600, "enabled": true },
+    { "kind": "reddit", "id": "reddit:options", "subreddit": "options", "listing": "new", "limit": 50, "pollSeconds": 600, "enabled": true },
+    { "kind": "reddit", "id": "reddit:StockMarket", "subreddit": "StockMarket", "listing": "new", "limit": 50, "pollSeconds": 600, "enabled": true },
 
     { "kind": "hn-rss", "id": "hn:frontpage", "url": "https://hnrss.org/frontpage", "pollSeconds": 600, "enabled": true },
 
