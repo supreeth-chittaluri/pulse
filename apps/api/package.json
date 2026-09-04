@@ -1,0 +1,7 @@
+{
+  "name": "@pulse/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@pulse/core": "*", "@pulse/sources": "*", "express": "^5.1.0" }
+}
