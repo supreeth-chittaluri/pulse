@@ -6,6 +6,7 @@
   "dependencies": {
     "@pulse/core": "*",
     "@pulse/sources": "*",
-    "@pulse/scoring": "*"
+    "@pulse/scoring": "*",
+    "@pulse/analysis": "*"
   }
 }

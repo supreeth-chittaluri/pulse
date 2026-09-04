@@ -8,6 +8,7 @@
  *   npm run worker -- status                                      (last run per source)
  *   npm run worker -- score-once --dry-run                        (cost/quota preview)
  *   npm run worker -- score-once --limit 60                       (send to Gemini)
+ *   npm run worker -- detect-spikes                               (free, no API)
  */
 import { parseArgs } from 'node:util';
 import {
@@ -21,12 +22,14 @@ import {
   type Logger,
   type Pool,
 } from '@pulse/core';
-import { buildSources, MinIntervalGate, type Source } from '@pulse/sources';
+import { buildSources, MinIntervalGate, systemClock, type Source } from '@pulse/sources';
 import {
   createGeminiModel,
   scorePendingPosts,
   GEMINI_RATE_LIMIT_BUCKET,
 } from '@pulse/scoring';
+import { HOUR_MS, latestCompleteWindow } from '@pulse/analysis';
+import { detectSpikes } from './spikes.ts';
 import { ingestSource } from './ingest.ts';
 import { runScheduler } from './scheduler.ts';
 
@@ -40,6 +43,7 @@ Commands:
   run                         Poll every source on its schedule until stopped
   status                      Show stored post counts and the last run per source
   score-once                  Score pending posts with Gemini (on demand only)
+  detect-spikes               Recompute baselines and flag spikes (free)
 
 Options:
   --source <id>   Source id from config/sources.json
@@ -47,6 +51,8 @@ Options:
                   score-once: pull at most n posts off the queue (default 60)
   --batch-size    score-once: posts per model request (default SCORING_BATCH_SIZE)
   --dry-run       score-once: report what would be sent, call nothing
+                  detect-spikes: compute baselines, record no spikes
+  --window        detect-spikes: hours back to test (default: last full hour)
   --json          fetch-once: print raw JSON
   --help          Show this message
 `.trim();
@@ -169,6 +175,43 @@ async function ingestOnce(pool: Pool, sources: Source[], logger: Logger): Promis
   return failed === sources.length ? 1 : 0;
 }
 
+/**
+ * Spike detection alongside ingestion.
+ *
+ * Detection touches no external service and costs nothing, so it runs on a
+ * timer rather than on demand -- the opposite of scoring. Buckets are hourly,
+ * so five minutes is ample: it only ever re-tests the last complete hour, and
+ * the unique constraint on (ticker, window_start) makes repeats free.
+ */
+async function detectionLoop(
+  pool: Pool,
+  logger: Logger,
+  signal: AbortSignal,
+  intervalMs = 5 * 60 * 1000,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      const summary = await detectSpikes({ pool, logger });
+      if (summary.recorded > 0) {
+        logger.info('spikes recorded', {
+          recorded: summary.recorded,
+          tickers: summary.tickersConsidered,
+        });
+      }
+    } catch (err) {
+      // Detection failing must never take ingestion down with it.
+      logger.error('spike detection failed', { error: (err as Error).message });
+    }
+
+    let remaining = intervalMs;
+    while (remaining > 0 && !signal.aborted) {
+      const chunk = Math.min(remaining, 500);
+      await systemClock.sleep(chunk, signal);
+      remaining -= chunk;
+    }
+  }
+}
+
 async function run(pool: Pool, sources: Source[], logger: Logger): Promise<number> {
   const gate = new MinIntervalGate(REDDIT_MIN_INTERVAL_MS);
   const controller = new AbortController();
@@ -186,13 +229,16 @@ async function run(pool: Pool, sources: Source[], logger: Logger): Promise<numbe
     });
   }
 
-  await runScheduler({
-    sources,
-    logger,
-    signal: controller.signal,
-    runImmediately: true,
-    run: (source, signal) => ingestSource({ pool, gate, logger }, source, signal),
-  });
+  await Promise.all([
+    runScheduler({
+      sources,
+      logger,
+      signal: controller.signal,
+      runImmediately: true,
+      run: (source, signal) => ingestSource({ pool, gate, logger }, source, signal),
+    }),
+    detectionLoop(pool, logger, controller.signal),
+  ]);
 
   return 0;
 }
@@ -269,6 +315,56 @@ async function scoreOnce(
   return summary.failures > 0 && summary.postsScored === 0 ? 1 : 0;
 }
 
+/**
+ * Spike detection. Costs nothing and calls no external service, so unlike
+ * scoring this is safe to run on a schedule -- see runScheduler wiring.
+ */
+async function detectSpikesCommand(
+  pool: Pool,
+  logger: Logger,
+  values: { window?: string; 'dry-run'?: boolean },
+): Promise<number> {
+  let windowStart: number | undefined;
+  if (values.window) {
+    const hoursBack = Number.parseInt(values.window, 10);
+    if (Number.isNaN(hoursBack) || hoursBack < 0) {
+      throw new Error('--window must be a non-negative number of hours back');
+    }
+    windowStart = latestCompleteWindow() - hoursBack * HOUR_MS;
+  }
+
+  const summary = await detectSpikes(
+    { pool, logger },
+    { windowStart, dryRun: values['dry-run'] ?? false },
+  );
+
+  console.log('');
+  console.log(`  window tested       ${new Date(summary.windowStart).toISOString()}`);
+  console.log(`  tickers considered  ${summary.tickersConsidered}`);
+  console.log(`  baselines written   ${summary.baselinesWritten}`);
+  console.log(`  spikes detected     ${summary.spikes.length}${values['dry-run'] ? ' (dry run, not recorded)' : ` (${summary.recorded} new)`}`);
+  console.log('');
+  console.log('  not flagged because:');
+  for (const [reason, count] of Object.entries(summary.rejections)) {
+    if (count > 0) console.log(`    ${reason.padEnd(22)} ${count}`);
+  }
+
+  if (summary.spikes.length > 0) {
+    console.log('');
+    for (const spike of summary.spikes) {
+      const sentiment =
+        spike.sentimentZ === null ? '   n/a' : spike.sentimentZ.toFixed(2).padStart(6);
+      console.log(
+        `    ${spike.tickerOrTopic.padEnd(6)} ${String(spike.mentionCount).padStart(4)} mentions ` +
+          `(baseline ${spike.baselineAvgVolume.toFixed(2)}/hr)  ` +
+          `volume z ${spike.volumeZ.toFixed(2).padStart(6)}  sentiment z ${sentiment}  ${spike.kind}`,
+      );
+    }
+  }
+  console.log('');
+  return 0;
+}
+
 async function status(pool: Pool): Promise<number> {
   const total = await countPosts(pool);
   const bySource = await countPostsBySource(pool);
@@ -309,6 +405,7 @@ async function main(): Promise<number> {
       source: { type: 'string' },
       limit: { type: 'string' },
       'batch-size': { type: 'string' },
+      window: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
@@ -327,7 +424,7 @@ async function main(): Promise<number> {
   if (command === 'list-sources') return listSources(config, sources);
   if (command === 'fetch-once') return await fetchOnce(sources, values);
 
-  const dbCommands = new Set(['ingest-once', 'run', 'status', 'score-once']);
+  const dbCommands = new Set(['ingest-once', 'run', 'status', 'score-once', 'detect-spikes']);
   if (!dbCommands.has(command)) {
     console.error(`Unknown command: ${command}\n\n${USAGE}`);
     return 1;
@@ -340,6 +437,7 @@ async function main(): Promise<number> {
     if (command === 'ingest-once') return await ingestOnce(pool, sources, logger);
     if (command === 'run') return await run(pool, sources, logger);
     if (command === 'score-once') return await scoreOnce(config, pool, logger, values);
+    if (command === 'detect-spikes') return await detectSpikesCommand(pool, logger, values);
     return await status(pool);
   } finally {
     await pool.end();

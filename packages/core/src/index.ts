@@ -28,3 +28,15 @@ export {
   type SignalInput,
   type LlmRequestRecord,
 } from './repositories/signals.ts';
+export {
+  selectObservationsSince,
+  upsertBaseline,
+  insertSpike,
+  lastSpikePerTicker,
+  watchlistThresholds,
+  recentSpikes,
+  type SignalObservation,
+  type BaselineRow,
+  type SpikeRow,
+  type RecentSpike,
+} from './repositories/spikes.ts';

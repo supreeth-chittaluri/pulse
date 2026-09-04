@@ -4,9 +4,9 @@ Detects unusual sentiment spikes for US equities by continuously ingesting
 retail and news chatter, scoring it with an LLM, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M2 complete.** Scheduled deduped ingestion, plus on-demand
-> sentiment scoring on Gemini's free tier. Spike detection is next — see the
-> milestone plan below.
+> **Status: M3 complete.** Scheduled deduped ingestion, on-demand sentiment
+> scoring on Gemini's free tier, and rolling-baseline spike detection. The API
+> and auth model are next — see the milestone plan below.
 
 ---
 
@@ -154,8 +154,8 @@ News front page, and three per-ticker Google News queries.
 | **M0** | Verify + scaffold | Worker prints raw posts from one subreddit; `GET /health` returns 200 | ✅ done |
 | **M1** | Ingestion pipeline | Two consecutive runs create no duplicate rows; a scheduled run fires unattended | ✅ done |
 | **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | ✅ live; eval awaiting labels |
-| **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | next |
-| **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | |
+| **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | ✅ done |
+| **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | next |
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | |
 | **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | |
 | **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | |
@@ -305,6 +305,71 @@ only, and every bound is re-checked locally with Zod. On top of the schema:
 - **Atomic writes.** Signals and `scored_at` commit in one transaction, so a
   crash can never mark a post scored with no signals.
 - **Poison posts drop out.** Three failed attempts and a post leaves the queue.
+
+## Spike detection (M3)
+
+```bash
+npm run worker -- detect-spikes            # test the last complete hour
+npm run worker -- detect-spikes --window 3 # test 3 hours back
+npm run worker -- detect-spikes --dry-run  # compute baselines, record nothing
+```
+
+It also runs automatically every 5 minutes inside `worker -- run`. Detection
+calls no external service and costs nothing, so unlike scoring it belongs on a
+timer rather than behind a manual command.
+
+### Volume gates, sentiment classifies
+
+Two z-scores per ticker, because either alone is misleading: a sentiment swing
+measured over two mentions is noise, and a volume surge with flat sentiment is
+usually just a news cycle. Volume is the gate — nothing fires without a real
+surge in discussion — and sentiment then classifies the result as `volume` or
+`volume+sentiment`. Only the latter will earn an SMS in M7.
+
+### Three things that make or break this
+
+**The baseline must exclude the window it is judging.** If the tested hour also
+feeds the baseline, a large spike raises the mean and inflates the spread,
+suppressing its own z-score: the bigger the event, the less it fires. There is a
+test asserting the clean score exceeds the contaminated one.
+
+**Averages are less noisy than what they average.** Sentiment compares a *mean*
+of n observations against the baseline, so it divides by the standard error
+(`σ/√n`), not by σ. A real swing of +0.6 against an individual-level σ of 0.4
+looks like a forgettable z=1.5 the naive way, and z=4.7 done correctly. Skip
+this and the detector quietly misses every genuine sentiment shift.
+
+**Empty hours count.** Volume baselines include hours with zero mentions.
+Averaging only the hours that happen to contain data answers "how many mentions
+does this ticker get in an hour where it is mentioned at all" — which is near 1
+for everything and useless.
+
+Plus the guards: a Poisson variance floor (`√mean`) so a ticker that sat at zero
+all week cannot score infinity on one mention; minimum 20 observations across 3
+distinct hours before a baseline exists at all; an absolute floor of 5 mentions
+so 0 → 1 cannot fire; and a 6-hour per-ticker cooldown.
+
+Google News feeds are **excluded from volume** (they poll on a timer, so their
+near-constant rate shrinks the baseline variance and makes ordinary fluctuation
+look significant) but still **counted for sentiment**, where cadence distorts
+nothing.
+
+### Measured operating characteristics
+
+Over 2,000 simulated series per cell, at the default `z ≥ 3.0`:
+
+| Baseline rate | 1× (no spike) | 2× | 3× | 5× | 10× |
+|---|---:|---:|---:|---:|---:|
+| 4/hr | **0.05%** | 22.2% | 69.6% | 98.7% | 100% |
+| 10/hr | **0.20%** | 51.8% | 97.5% | 100% | 100% |
+| 25/hr | **0.15%** | 91.0% | 99.9% | 100% | 100% |
+
+The 1× column is the false-positive rate. Both bounds are pinned by tests, so a
+change to the formula cannot quietly trade detection power for quiet.
+
+The default threshold is 3.0 rather than the schema's 2.5: at 2.5 across ~90
+tickers checked hourly, noise alone yields roughly one false alert an hour.
+`watchlist.alert_threshold` still overrides it per ticker.
 
 ## Cost
 
