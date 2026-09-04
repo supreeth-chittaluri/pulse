@@ -22,6 +22,7 @@ export function createHnRssSource(options: HnRssOptions): Source {
     id,
     adapter: 'hn-rss',
     pollSeconds,
+    rateLimitBucket: null,
     async fetch(): Promise<RawPost[]> {
       const xml = await fetchText(url, { userAgent });
       return parseFeed(xml).map((entry): RawPost => ({

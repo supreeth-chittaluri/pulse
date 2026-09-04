@@ -75,6 +75,7 @@ export function createRedditOAuthSource(options: RedditOAuthOptions): Source {
     id,
     adapter: 'reddit-oauth',
     pollSeconds,
+    rateLimitBucket: 'reddit',
     async fetch(): Promise<RawPost[]> {
       const bearer = await accessToken();
       const url = `https://oauth.reddit.com/r/${subreddit}/${listing}?limit=${Math.min(limit, 100)}&raw_json=1`;

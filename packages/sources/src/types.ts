@@ -10,7 +10,12 @@ export interface Source {
   readonly id: string;
   /** Which adapter is actually behind this source, for logging and /health. */
   readonly adapter: string;
-  /** How often M1's scheduler should poll it. */
+  /** How often the scheduler should poll it. */
   readonly pollSeconds: number;
+  /**
+   * Sources sharing a bucket queue behind one another through a MinIntervalGate.
+   * Null means the source has no client-wide limit worth respecting.
+   */
+  readonly rateLimitBucket: string | null;
   fetch(): Promise<RawPost[]>;
 }

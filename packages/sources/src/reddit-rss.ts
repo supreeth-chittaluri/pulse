@@ -27,6 +27,7 @@ export function createRedditRssSource(options: RedditRssOptions): Source {
     id,
     adapter: 'reddit-rss',
     pollSeconds,
+    rateLimitBucket: 'reddit',
     async fetch(): Promise<RawPost[]> {
       // Reddit's limiter is per-client across all feeds and is measured in
       // requests per minute, so short retries are useless here: 8s, 16s, 32s.
