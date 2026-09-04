@@ -1,0 +1,13 @@
+{
+  "name": "@pulse/scoring",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@google/genai": "^2.21.0",
+    "@pulse/core": "*",
+    "@pulse/sources": "*",
+    "zod": "^4.0.0"
+  }
+}
