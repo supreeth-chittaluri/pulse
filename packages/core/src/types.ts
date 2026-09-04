@@ -1,4 +1,4 @@
-/** A post as ingested from a source, before Claude has looked at it (M2). */
+/** A post as ingested from a source, before the scoring model has seen it (M2). */
 export type RawPost = {
   /** Registry source id, e.g. "reddit:wallstreetbets". */
   source: string;

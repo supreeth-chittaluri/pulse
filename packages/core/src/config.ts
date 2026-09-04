@@ -15,9 +15,12 @@ const envSchema = z.object({
   REDDIT_CLIENT_ID: z.string().optional(),
   REDDIT_CLIENT_SECRET: z.string().optional(),
 
-  // M2+, unused in M0.
-  ANTHROPIC_API_KEY: z.string().optional(),
-  ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5'),
+  // M2+, unused in M0/M1.
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
+  GEMINI_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(6_000),
+  GEMINI_DAILY_REQUEST_BUDGET: z.coerce.number().int().positive().default(200),
+  SCORING_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(15),
 });
 
 export type Config = {
@@ -28,7 +31,13 @@ export type Config = {
   /** True only when BOTH Reddit OAuth credentials are present. */
   redditOAuthEnabled: boolean;
   reddit: { clientId?: string; clientSecret?: string };
-  anthropic: { apiKey?: string; model: string };
+  gemini: {
+    apiKey?: string;
+    model: string;
+    minIntervalMs: number;
+    dailyRequestBudget: number;
+  };
+  scoring: { batchSize: number };
 };
 
 let cached: Config | undefined;
@@ -69,7 +78,13 @@ export function loadConfig(): Config {
     userAgent: env.USER_AGENT,
     redditOAuthEnabled: hasId && hasSecret,
     reddit: { clientId: env.REDDIT_CLIENT_ID, clientSecret: env.REDDIT_CLIENT_SECRET },
-    anthropic: { apiKey: env.ANTHROPIC_API_KEY, model: env.ANTHROPIC_MODEL },
+    gemini: {
+      apiKey: env.GEMINI_API_KEY,
+      model: env.GEMINI_MODEL,
+      minIntervalMs: env.GEMINI_MIN_INTERVAL_MS,
+      dailyRequestBudget: env.GEMINI_DAILY_REQUEST_BUDGET,
+    },
+    scoring: { batchSize: env.SCORING_BATCH_SIZE },
   };
   return cached;
 }

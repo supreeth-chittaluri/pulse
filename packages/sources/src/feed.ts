@@ -112,7 +112,7 @@ function decodeEntities(input: string): string {
 }
 
 /**
- * Feed bodies are HTML. Claude scores plain text in M2 and raw_excerpt is
+ * Feed bodies are HTML. Scoring reads plain text in M2 and raw_excerpt is
  * shown in the UI in M6, so strip tags once here rather than in three places.
  */
 export function htmlToText(html: string | null, maxLength = 2000): string | null {

@@ -12,7 +12,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     userAgent: 'pulse-test/0.1',
     redditOAuthEnabled: false,
     reddit: {},
-    anthropic: { model: 'claude-haiku-4-5' },
+    gemini: { model: 'gemini-3.5-flash', minIntervalMs: 6_000, dailyRequestBudget: 200 },
+    scoring: { batchSize: 15 },
     ...overrides,
   };
 }
