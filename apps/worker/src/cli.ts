@@ -6,6 +6,8 @@
  *   npm run worker -- ingest-once                                 (all sources -> Postgres)
  *   npm run worker -- run                                         (scheduled loop)
  *   npm run worker -- status                                      (last run per source)
+ *   npm run worker -- score-once --dry-run                        (cost/quota preview)
+ *   npm run worker -- score-once --limit 60                       (send to Gemini)
  */
 import { parseArgs } from 'node:util';
 import {
@@ -20,6 +22,11 @@ import {
   type Pool,
 } from '@pulse/core';
 import { buildSources, MinIntervalGate, type Source } from '@pulse/sources';
+import {
+  createGeminiModel,
+  scorePendingPosts,
+  GEMINI_RATE_LIMIT_BUCKET,
+} from '@pulse/scoring';
 import { ingestSource } from './ingest.ts';
 import { runScheduler } from './scheduler.ts';
 
@@ -32,10 +39,14 @@ Commands:
   ingest-once                 Fetch every source once and write to Postgres
   run                         Poll every source on its schedule until stopped
   status                      Show stored post counts and the last run per source
+  score-once                  Score pending posts with Gemini (on demand only)
 
 Options:
   --source <id>   Source id from config/sources.json
   --limit <n>     fetch-once: print at most n posts
+                  score-once: pull at most n posts off the queue (default 60)
+  --batch-size    score-once: posts per model request (default SCORING_BATCH_SIZE)
+  --dry-run       score-once: report what would be sent, call nothing
   --json          fetch-once: print raw JSON
   --help          Show this message
 `.trim();
@@ -186,6 +197,78 @@ async function run(pool: Pool, sources: Source[], logger: Logger): Promise<numbe
   return 0;
 }
 
+/**
+ * On-demand scoring. Deliberately NOT part of the scheduled loop: the Gemini
+ * free tier is a fixed daily request quota, so recurring spend of it should be
+ * an explicit act.
+ */
+async function scoreOnce(
+  config: Config,
+  pool: Pool,
+  logger: Logger,
+  values: { limit?: string; 'batch-size'?: string; 'dry-run'?: boolean },
+): Promise<number> {
+  const limit = values.limit ? Number.parseInt(values.limit, 10) : 60;
+  const batchSize = values['batch-size']
+    ? Number.parseInt(values['batch-size'], 10)
+    : config.scoring.batchSize;
+  const dryRun = values['dry-run'] ?? false;
+
+  if (Number.isNaN(limit) || limit <= 0) throw new Error('--limit must be a positive integer');
+  if (Number.isNaN(batchSize) || batchSize <= 0) {
+    throw new Error('--batch-size must be a positive integer');
+  }
+
+  if (!dryRun && !config.gemini.apiKey) {
+    throw new Error(
+      'GEMINI_API_KEY is not set.\n' +
+        'Get a free key (no card) at https://aistudio.google.com/apikey, put it in\n' +
+        '.env, and keep billing OFF on that project -- enabling billing removes the\n' +
+        'free tier entirely. Use --dry-run to preview without a key.',
+    );
+  }
+
+  // Built only for a real run. Constructing the SDK client in dry-run mode
+  // would warn about the missing key for a call we are never going to make.
+  const model = dryRun
+    ? {
+        provider: 'gemini',
+        model: config.gemini.model,
+        generate: () => {
+          throw new Error('dry run must not call the model');
+        },
+      }
+    : createGeminiModel({ apiKey: config.gemini.apiKey!, model: config.gemini.model });
+  const gate = new MinIntervalGate(config.gemini.minIntervalMs);
+
+  const summary = await scorePendingPosts(
+    { pool, model, gate, logger },
+    { limit, batchSize, dailyRequestBudget: config.gemini.dailyRequestBudget, dryRun },
+  );
+
+  console.log('');
+  if (dryRun) {
+    console.log(`DRY RUN -- nothing was sent to ${config.gemini.model}.\n`);
+  }
+  console.log(`  posts considered        ${summary.postsConsidered}`);
+  console.log(`  no ticker candidates    ${summary.skippedNoCandidates}  (scored free, 0 quota)`);
+  console.log(`  posts needing the model ${summary.postsSent}`);
+  console.log(`  requests ${dryRun ? 'required' : 'made'}        ${summary.requestsMade}  (batch size ${batchSize})`);
+  if (!dryRun) {
+    console.log(`  posts scored            ${summary.postsScored}`);
+    console.log(`  signals written         ${summary.signalsWritten}`);
+    console.log(`  tokens in/out           ${summary.inputTokens} / ${summary.outputTokens}`);
+    if (summary.failures > 0) console.log(`  failures                ${summary.failures}`);
+  }
+  console.log(`  daily budget left       ${summary.requestsRemainingToday} of ${config.gemini.dailyRequestBudget}`);
+
+  if (summary.stoppedEarly) {
+    console.log(`\n  STOPPED EARLY: ${summary.stoppedEarly}`);
+  }
+  console.log('');
+  return summary.failures > 0 && summary.postsScored === 0 ? 1 : 0;
+}
+
 async function status(pool: Pool): Promise<number> {
   const total = await countPosts(pool);
   const bySource = await countPostsBySource(pool);
@@ -225,6 +308,8 @@ async function main(): Promise<number> {
     options: {
       source: { type: 'string' },
       limit: { type: 'string' },
+      'batch-size': { type: 'string' },
+      'dry-run': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -242,7 +327,8 @@ async function main(): Promise<number> {
   if (command === 'list-sources') return listSources(config, sources);
   if (command === 'fetch-once') return await fetchOnce(sources, values);
 
-  if (command !== 'ingest-once' && command !== 'run' && command !== 'status') {
+  const dbCommands = new Set(['ingest-once', 'run', 'status', 'score-once']);
+  if (!dbCommands.has(command)) {
     console.error(`Unknown command: ${command}\n\n${USAGE}`);
     return 1;
   }
@@ -253,6 +339,7 @@ async function main(): Promise<number> {
   try {
     if (command === 'ingest-once') return await ingestOnce(pool, sources, logger);
     if (command === 'run') return await run(pool, sources, logger);
+    if (command === 'score-once') return await scoreOnce(config, pool, logger, values);
     return await status(pool);
   } finally {
     await pool.end();

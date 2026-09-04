@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "dependencies": { "@pulse/core": "*", "@pulse/sources": "*" }
+  "dependencies": {
+    "@pulse/core": "*",
+    "@pulse/sources": "*",
+    "@pulse/scoring": "*"
+  }
 }
