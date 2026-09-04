@@ -4,9 +4,10 @@ Detects unusual sentiment spikes for US equities by continuously ingesting
 retail and news chatter, scoring it with an LLM, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M3 complete.** Scheduled deduped ingestion, on-demand sentiment
-> scoring on Gemini's free tier, and rolling-baseline spike detection. The API
-> and auth model are next — see the milestone plan below.
+> **Status: M4 complete.** Scheduled deduped ingestion, on-demand sentiment
+> scoring on Gemini's free tier, rolling-baseline spike detection, and a
+> rate-limited API with a three-tier auth model. Real-time push is next — see
+> the milestone plan below.
 
 ---
 
@@ -155,8 +156,8 @@ News front page, and three per-ticker Google News queries.
 | **M1** | Ingestion pipeline | Two consecutive runs create no duplicate rows; a scheduled run fires unattended | ✅ done |
 | **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | ✅ live; eval awaiting labels |
 | **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | ✅ done |
-| **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | next |
-| **M5** | Real-time push | A new signal appears live in two open browser tabs | |
+| **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | ✅ done |
+| **M5** | Real-time push | A new signal appears live in two open browser tabs | next |
 | **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | |
 | **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | |
 | **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
@@ -370,6 +371,90 @@ change to the formula cannot quietly trade detection power for quiet.
 The default threshold is 3.0 rather than the schema's 2.5: at 2.5 across ~90
 tickers checked hourly, noise alone yields roughly one false alert an hour.
 `watchlist.alert_threshold` still overrides it per ticker.
+
+## API and auth (M4)
+
+```bash
+npm run db:seed    # creates the demo and admin accounts from .env
+npm run dev:api
+```
+
+### Three tiers, one boundary
+
+| Tier | Who | Can do |
+|---|---|---|
+| **anonymous** | anyone | every read, no token at all |
+| **demo** | seeded account | identical reads, plus a signed-in UI state |
+| **admin** | credentials in `.env` only | writes, and anything that spends quota |
+
+Demo grants **no extra data access** — it exists for the M6 login narrative.
+That keeps the security boundary in exactly one place: *reads are public,
+mutations are admin*. Reads must be anonymous because M8's acceptance is that a
+stranger can open the dashboard with no login, and there is a test asserting
+that now rather than discovering it at deploy time.
+
+`requireRole('admin')` sits on the **mount**, not on individual routes, so a
+route added to `adminRoutes` later inherits the guard rather than needing to
+remember it. A test hits an unknown path under `/api/admin` and expects 403/401
+to prove the mount is what enforces it.
+
+### Endpoints
+
+```
+GET  /health                     GET  /api/tickers
+GET  /api/stats                  GET  /api/tickers/:ticker     trend + recent signals
+GET  /api/signals                POST /api/auth/login
+GET  /api/spikes                 GET  /api/auth/me
+                                 POST /api/auth/signup         403 + demo-mode message
+
+GET    /api/admin/watchlist            admin
+POST   /api/admin/watchlist            admin
+DELETE /api/admin/watchlist/:ticker    admin
+GET    /api/admin/scoring-status       admin — backlog and remaining quota
+POST   /api/admin/score                admin — SPENDS GEMINI QUOTA
+```
+
+`POST /api/admin/score` is the most sensitive route in the application. On a
+metered API a leaked trigger costs money; on a fixed free quota it is a denial
+of service — a stranger drains the day and scoring dies until midnight Pacific.
+It exists only because M8 deploys to a platform with no shell, and it is capped
+at 60 posts (4 requests, ~25s) so even a stolen admin token cannot drain the
+quota in one call. The tradeoff: the API process needs `GEMINI_API_KEY`, where
+the worker would otherwise be the only holder.
+
+### Rate limiting and caching
+
+60 requests/minute per IP on public routes, 10/minute on admin, 10/minute on
+login specifically. The 61st request in a minute returns 429 with `Retry-After`.
+Anonymous GETs are cached in-process for 20s.
+
+**The limiter is in-process, and that is a real limitation.** Free-tier hosting
+has no Redis, and a Postgres-backed counter would mean a write per request. The
+window resets on restart, and two instances would each allow the full budget.
+Correct for one small instance; needs a shared store the moment this scales.
+
+**Deployment trap:** behind Render/Fly/Vercel, `req.ip` is the proxy unless
+`TRUST_PROXY=1`. Without it every request shares one bucket and the first client
+to hit 60 locks out everyone.
+
+The cache never serves a body to a request carrying an `Authorization` header —
+a cached response handed to the wrong person is the classic way this feature
+goes wrong, so it is asserted by a test.
+
+### Credentials
+
+Passwords use `node:crypto` scrypt (N=2¹⁵) — built in, so no native module and
+no third-party supply chain on the one thing that must not be compromised. The
+cost parameters are stored in the hash, so they can be raised later without
+invalidating existing accounts. Login burns comparable time when the account
+does not exist, and returns an identical response, so it cannot be used to
+enumerate emails.
+
+`JWT_SECRET` must be at least 32 characters and **production refuses to start
+without it** — a predictable signing key is a complete auth bypass. Development
+falls back to a random per-process key, so tokens stop working across restarts
+rather than a checked-in default silently reaching production. The admin
+password has no default at all; seeding refuses to create an admin without one.
 
 ## Cost
 

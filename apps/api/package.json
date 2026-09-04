@@ -3,5 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "dependencies": { "@pulse/core": "*", "@pulse/sources": "*", "express": "^5.1.0" }
+  "dependencies": {
+    "@pulse/core": "*",
+    "@pulse/sources": "*",
+    "express": "^5.1.0",
+    "jose": "^6.2.11",
+    "@pulse/scoring": "*"
+  }
 }

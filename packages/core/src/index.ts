@@ -40,3 +40,27 @@ export {
   type SpikeRow,
   type RecentSpike,
 } from './repositories/spikes.ts';
+export { makeTestConfig } from './test-config.ts';
+export {
+  findUserByEmail,
+  upsertUser,
+  recordLogin,
+  countUsers,
+  normalizeEmail,
+  type User,
+} from './repositories/users.ts';
+export {
+  selectSignals,
+  selectTickerSummaries,
+  selectTickerTrend,
+  selectStats,
+  selectWatchlist,
+  upsertWatchlistEntry,
+  deleteWatchlistEntry,
+  type SignalRow,
+  type SignalQuery,
+  type TickerSummary,
+  type TrendPoint,
+  type Stats,
+  type WatchlistEntry,
+} from './repositories/queries.ts';

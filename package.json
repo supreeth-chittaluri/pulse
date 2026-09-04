@@ -20,7 +20,8 @@
     "test": "vitest run",
     "eval:export": "node scripts/export-eval-set.ts",
     "eval:scoring": "node scripts/eval-scoring.ts",
-    "tickers:refresh": "node scripts/refresh-tickers.ts"
+    "tickers:refresh": "node scripts/refresh-tickers.ts",
+    "db:seed": "node scripts/seed-users.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

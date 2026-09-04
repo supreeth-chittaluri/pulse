@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 
 /**
@@ -21,6 +22,17 @@ const envSchema = z.object({
   GEMINI_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(4_000),
   GEMINI_DAILY_REQUEST_BUDGET: z.coerce.number().int().positive().default(400),
   SCORING_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(15),
+
+  // M4.
+  JWT_SECRET: z.string().optional(),
+  JWT_TTL_HOURS: z.coerce.number().int().positive().default(12),
+  CORS_ORIGINS: z.string().default(''),
+  RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(60),
+  ADMIN_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(10),
+  CACHE_TTL_SECONDS: z.coerce.number().int().min(0).default(20),
+  // Render/Fly/Vercel put a proxy in front of us. Without this every request
+  // appears to come from the proxy and one client throttles everyone.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
 });
 
 export type Config = {
@@ -38,7 +50,35 @@ export type Config = {
     dailyRequestBudget: number;
   };
   scoring: { batchSize: number };
+  auth: { jwtSecret: string; jwtTtlHours: number };
+  http: {
+    corsOrigins: string[];
+    rateLimitPerMinute: number;
+    adminRateLimitPerMinute: number;
+    cacheTtlSeconds: number;
+    trustProxy: number;
+  };
 };
+
+/**
+ * A predictable signing key is a complete auth bypass, so production refuses to
+ * start without one. Development gets a random per-process key instead: tokens
+ * stop working across restarts, which is mildly annoying and much safer than a
+ * checked-in default that reaches production by accident.
+ */
+function resolveJwtSecret(secret: string | undefined, nodeEnv: string): string {
+  if (secret && secret.length >= 32) return secret;
+  if (nodeEnv === 'production') {
+    throw new Error(
+      'JWT_SECRET must be set to at least 32 characters in production.\n' +
+        'Generate one with:  node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))"',
+    );
+  }
+  if (secret) {
+    throw new Error(`JWT_SECRET is set but only ${secret.length} chars; needs at least 32.`);
+  }
+  return randomBytes(48).toString('base64url');
+}
 
 let cached: Config | undefined;
 
@@ -85,6 +125,14 @@ export function loadConfig(): Config {
       dailyRequestBudget: env.GEMINI_DAILY_REQUEST_BUDGET,
     },
     scoring: { batchSize: env.SCORING_BATCH_SIZE },
+    auth: { jwtSecret: resolveJwtSecret(env.JWT_SECRET, env.NODE_ENV), jwtTtlHours: env.JWT_TTL_HOURS },
+    http: {
+      corsOrigins: env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
+      rateLimitPerMinute: env.RATE_LIMIT_PER_MINUTE,
+      adminRateLimitPerMinute: env.ADMIN_RATE_LIMIT_PER_MINUTE,
+      cacheTtlSeconds: env.CACHE_TTL_SECONDS,
+      trustProxy: env.TRUST_PROXY,
+    },
   };
   return cached;
 }

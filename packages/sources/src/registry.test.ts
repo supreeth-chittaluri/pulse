@@ -1,21 +1,11 @@
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import type { Config } from '@pulse/core';
+import { makeTestConfig, type Config } from '@pulse/core';
 import { buildSources, loadSourceConfig, type SourceConfig } from './registry.ts';
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
-    databaseUrl: 'postgres://localhost:5433/test',
-    port: 3000,
-    nodeEnv: 'test',
-    userAgent: 'pulse-test/0.1',
-    redditOAuthEnabled: false,
-    reddit: {},
-    gemini: { model: 'gemini-3.5-flash-lite', minIntervalMs: 4_000, dailyRequestBudget: 400 },
-    scoring: { batchSize: 15 },
-    ...overrides,
-  };
+  return makeTestConfig(overrides);
 }
 
 const REDDIT: SourceConfig[] = [
