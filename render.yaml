@@ -27,6 +27,14 @@ services:
         value: "1"
       - key: RUN_WORKER_IN_API
         value: "true"
+      - key: AUTO_SCORING_ENABLED
+        value: "true"
+      - key: AUTO_SCORING_INTERVAL_MINUTES
+        value: "30"
+      - key: AUTO_SCORING_POST_LIMIT
+        value: "60"
+      - key: TRIAGE_BATCH_SIZE
+        value: "2000"
       # Same origin serves the dashboard, so no CORS allowlist is needed.
       - key: CORS_ORIGINS
         value: ""

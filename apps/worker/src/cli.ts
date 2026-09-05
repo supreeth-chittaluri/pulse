@@ -46,7 +46,7 @@ Commands:
   ingest-once                 Fetch every source once and write to Postgres
   run                         Poll every source on its schedule until stopped
   status                      Show stored post counts and the last run per source
-  score-once                  Score pending posts with Gemini (on demand only)
+  score-once                  Run an extra scoring pass with Gemini
   detect-spikes               Recompute baselines and flag spikes (free)
   alerts                      Send SMS for pending spikes (COSTS MONEY)
 
@@ -202,9 +202,8 @@ async function run(
 }
 
 /**
- * On-demand scoring. Deliberately NOT part of the scheduled loop: the Gemini
- * free tier is a fixed daily request quota, so recurring spend of it should be
- * an explicit act.
+ * An extra on-demand scoring pass. The background loop normally handles this;
+ * the CLI is useful for maintenance and local verification.
  */
 async function scoreOnce(
   config: Config,

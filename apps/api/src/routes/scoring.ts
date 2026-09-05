@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import {
-  countUnscoredPosts,
+  countFailedScoringPosts,
+  countRequestsToday,
+  countScoringBacklog,
+  countTriageBacklog,
   finishScoreRun,
   reserveScoreRun,
   scoreRunStatus,
@@ -8,25 +11,32 @@ import {
   type Logger,
   type Pool,
 } from '@pulse/core';
-import { createGeminiModel, scorePendingPosts } from '@pulse/scoring';
+import { createGeminiModel, scorePendingPosts, triagePendingPosts } from '@pulse/scoring';
 import { MinIntervalGate } from '@pulse/sources';
 
-/** One button press can score at most four batches of fifteen posts. */
+/** One button press can score at most 60 candidate posts. */
 export const SCORE_POST_LIMIT = 60;
 
 /**
- * App-wide, not per visitor. Ten full runs are at most 40 Gemini requests,
- * leaving 90% of Pulse's default 400-request provider safety budget untouched.
+ * App-wide, not per visitor. Automatic runs do not consume this manual limit;
+ * every underlying request still shares the strict provider-request budget.
  */
 export const DAILY_SCORE_RUN_LIMIT = 10;
 
 async function publicStatus(pool: Pool, config: Config) {
-  const [pendingPosts, runs] = await Promise.all([
-    countUnscoredPosts(pool),
+  const [triagePendingPosts, pendingPosts, failedPosts, requestsUsedToday, runs] = await Promise.all([
+    countTriageBacklog(pool),
+    countScoringBacklog(pool),
+    countFailedScoringPosts(pool),
+    countRequestsToday(pool, 'gemini'),
     scoreRunStatus(pool),
   ]);
+  const intervalMs = config.scoring.autoIntervalMinutes * 60_000;
+  const nextAutomaticRunAt = new Date((Math.floor(Date.now() / intervalMs) + 1) * intervalMs);
   return {
+    triagePendingPosts,
     pendingPosts,
+    failedPosts,
     maxPostsPerRun: SCORE_POST_LIMIT,
     batchSize: config.scoring.batchSize,
     estimatedRequestsForNextRun: Math.ceil(
@@ -37,13 +47,21 @@ async function publicStatus(pool: Pool, config: Config) {
     dailyRunLimit: DAILY_SCORE_RUN_LIMIT,
     resetAt: runs.resetAt,
     running: runs.running,
+    runningKind: runs.runningKind,
+    automaticScoringEnabled: config.scoring.autoEnabled,
+    automaticIntervalMinutes: config.scoring.autoIntervalMinutes,
+    lastAutomaticRunAt: runs.lastAutomaticRunAt,
+    nextAutomaticRunAt,
+    requestsUsedToday,
+    requestsRemainingToday: Math.max(0, config.gemini.dailyRequestBudget - requestsUsedToday),
+    dailyRequestBudget: config.gemini.dailyRequestBudget,
   };
 }
 
 /**
  * Public manual scoring, deliberately separate from ordinary read routes.
- * Spending is bounded in three layers: 60 posts per run, ten durable global
- * runs per Pacific quota day, and the existing 400-request Gemini budget.
+ * Usage is bounded in three layers: 60 posts per run, ten durable global
+ * manual runs per Pacific quota day, and one shared request-level budget.
  */
 export function scoringRoutes(pool: Pool, config: Config, logger: Logger): Router {
   const router = Router();
@@ -93,6 +111,10 @@ export function scoringRoutes(pool: Pool, config: Config, logger: Logger): Route
     });
 
     try {
+      const triage = await triagePendingPosts(
+        { pool, logger },
+        { limit: config.scoring.triageBatchSize },
+      );
       const summary = await scorePendingPosts(
         {
           pool,
@@ -112,6 +134,7 @@ export function scoringRoutes(pool: Pool, config: Config, logger: Logger): Route
       await finishScoreRun(pool, reservation.runId);
       res.json({
         ok: true,
+        triage,
         summary,
         status: await publicStatus(pool, config),
       });

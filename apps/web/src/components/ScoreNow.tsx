@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError, type ScoringStatus } from '../api.ts';
+import { api, ApiError, timeAgo, type ScoringStatus } from '../api.ts';
 
 const LIMIT_MESSAGE =
   'The daily scoring limit has been used. Please try again after midnight Pacific.';
@@ -41,10 +41,10 @@ export function ScoreNow({ onScored }: { onScored: () => Promise<void> }) {
     try {
       const result = await api.scoreNow();
       setStatus(result.status);
-      const processed = result.summary.postsScored + result.summary.skippedNoCandidates;
+      const processed = result.summary.postsScored + result.triage.postsCompletedFree;
       setMessage(
         processed === 0
-          ? 'No posts were waiting to be scored.'
+          ? 'The queue is already caught up.'
           : `Processed ${processed} posts and added ${result.summary.signalsWritten} new signals.`,
       );
       await onScored();
@@ -60,22 +60,40 @@ export function ScoreNow({ onScored }: { onScored: () => Promise<void> }) {
 
   const limitReached = status !== null && status.runsRemainingToday <= 0;
   const unavailable = status === null;
-  const disabled = busy || Boolean(status?.running) || status?.pendingPosts === 0 || unavailable;
+  const queueSize = (status?.triagePendingPosts ?? 0) + (status?.pendingPosts ?? 0);
+  const disabled = busy || Boolean(status?.running) || queueSize === 0 || unavailable;
 
   return (
     <section className="card score-card" aria-labelledby="score-now-title">
       <div>
         <h2 id="score-now-title">Update sentiment signals</h2>
         <p className="score-description">
-          Score up to {status?.maxPostsPerRun ?? 60} queued posts with Gemini. Available to
-          everyone and limited globally to {status?.dailyRunLimit ?? 10} runs per day.
+          Signals update automatically every {status?.automaticIntervalMinutes ?? 30} minutes.
+          Score now is an optional immediate refresh, available to everyone and limited globally
+          to {status?.dailyRunLimit ?? 10} manual runs per day.
         </p>
         <div className="score-meta" aria-live="polite">
           {status ? (
             <>
-              <span>{status.pendingPosts.toLocaleString()} posts waiting</span>
+              <span>{status.triagePendingPosts.toLocaleString()} awaiting free ticker filter</span>
+              <span>{status.pendingPosts.toLocaleString()} awaiting Gemini</span>
               <span>
                 {status.runsRemainingToday} of {status.dailyRunLimit} runs remaining today
+              </span>
+              <span>
+                {status.requestsUsedToday} of {status.dailyRequestBudget} Gemini requests used
+              </span>
+              <span>
+                {status.lastAutomaticRunAt
+                  ? `Last automatic update ${timeAgo(status.lastAutomaticRunAt)}`
+                  : 'Automatic update has not run yet'}
+              </span>
+              <span>
+                Next scheduled update{' '}
+                {new Date(status.nextAutomaticRunAt).toLocaleTimeString([], {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })}
               </span>
             </>
           ) : (

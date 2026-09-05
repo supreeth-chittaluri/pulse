@@ -11,6 +11,7 @@
     "@pulse/alerting": "*"
   },
   "exports": {
-    "./loops": "./src/loops.ts"
+    "./loops": "./src/loops.ts",
+    "./auto-score": "./src/auto-score.ts"
   }
 }

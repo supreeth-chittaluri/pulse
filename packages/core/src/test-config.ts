@@ -17,7 +17,13 @@ export function makeTestConfig(overrides: Partial<Config> = {}): Config {
       minIntervalMs: 0,
       dailyRequestBudget: 400,
     },
-    scoring: { batchSize: 15 },
+    scoring: {
+      batchSize: 15,
+      autoEnabled: true,
+      autoIntervalMinutes: 30,
+      autoPostLimit: 60,
+      triageBatchSize: 2_000,
+    },
     runWorkerInApi: false,
     alerts: {
       enabled: false,

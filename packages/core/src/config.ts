@@ -22,6 +22,13 @@ const envSchema = z.object({
   GEMINI_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(4_000),
   GEMINI_DAILY_REQUEST_BUDGET: z.coerce.number().int().positive().default(400),
   SCORING_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(15),
+  AUTO_SCORING_ENABLED: z
+    .string()
+    .default('true')
+    .transform((value) => value === 'true'),
+  AUTO_SCORING_INTERVAL_MINUTES: z.coerce.number().int().min(5).default(30),
+  AUTO_SCORING_POST_LIMIT: z.coerce.number().int().min(1).max(500).default(60),
+  TRIAGE_BATCH_SIZE: z.coerce.number().int().min(1).max(10_000).default(2_000),
 
   // M4.
   JWT_SECRET: z.string().optional(),
@@ -70,7 +77,13 @@ export type Config = {
     minIntervalMs: number;
     dailyRequestBudget: number;
   };
-  scoring: { batchSize: number };
+  scoring: {
+    batchSize: number;
+    autoEnabled: boolean;
+    autoIntervalMinutes: number;
+    autoPostLimit: number;
+    triageBatchSize: number;
+  };
   auth: { jwtSecret: string; jwtTtlHours: number };
   alerts: {
     enabled: boolean;
@@ -155,7 +168,13 @@ export function loadConfig(): Config {
       minIntervalMs: env.GEMINI_MIN_INTERVAL_MS,
       dailyRequestBudget: env.GEMINI_DAILY_REQUEST_BUDGET,
     },
-    scoring: { batchSize: env.SCORING_BATCH_SIZE },
+    scoring: {
+      batchSize: env.SCORING_BATCH_SIZE,
+      autoEnabled: env.AUTO_SCORING_ENABLED,
+      autoIntervalMinutes: env.AUTO_SCORING_INTERVAL_MINUTES,
+      autoPostLimit: env.AUTO_SCORING_POST_LIMIT,
+      triageBatchSize: env.TRIAGE_BATCH_SIZE,
+    },
     auth: { jwtSecret: resolveJwtSecret(env.JWT_SECRET, env.NODE_ENV), jwtTtlHours: env.JWT_TTL_HOURS },
     alerts: {
       enabled: env.ALERTS_ENABLED,

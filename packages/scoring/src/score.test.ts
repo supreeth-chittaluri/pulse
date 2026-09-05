@@ -3,9 +3,14 @@ import { dirname, resolve } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   countRequestsToday,
+  countScoringBacklog,
+  countTriageBacklog,
   countSignals,
   createPool,
   insertPosts,
+  finishScoreRun,
+  reserveAutomaticScoreRun,
+  reserveScoreRun,
   type Logger,
   type Pool,
   type RawPost,
@@ -13,6 +18,7 @@ import {
 import { MinIntervalGate } from '@pulse/sources';
 import { runMigrations } from '../../../db/migrate.ts';
 import { scorePendingPosts } from './score.ts';
+import { triagePendingPosts } from './triage.ts';
 import { QuotaExceededError, type GenerateResult, type ScoringModel } from './gemini.ts';
 
 /**
@@ -120,7 +126,37 @@ const OPTIONS = { limit: 100, batchSize: 10, dailyRequestBudget: 100 };
 
 describe.skipIf(skipReason !== null)('scorePendingPosts', () => {
   beforeEach(async () => {
-    await pool!.query('truncate posts, signals, llm_requests restart identity cascade');
+    await pool!.query('truncate posts, signals, llm_requests, score_runs restart identity cascade');
+  });
+
+  it('persists free triage and leaves only ticker candidates in the Gemini queue', async () => {
+    await seed([
+      post({ title: '$NVDA earnings play' }),
+      post({ title: 'Show HN: a static site generator', body: 'no tickers here' }),
+    ]);
+
+    const summary = await triagePendingPosts(
+      { pool: pool!, logger: silentLogger },
+      { limit: 100 },
+    );
+
+    expect(summary).toEqual({
+      postsConsidered: 2,
+      postsCompletedFree: 1,
+      postsQueuedForGemini: 1,
+    });
+    expect(await countTriageBacklog(pool!)).toBe(0);
+    expect(await countScoringBacklog(pool!)).toBe(1);
+  });
+
+  it('coordinates automatic and manual runs through one durable slot lock', async () => {
+    const automatic = await reserveAutomaticScoreRun(pool!, 30);
+    expect(automatic.state).toBe('reserved');
+    expect((await reserveScoreRun(pool!, 10)).state).toBe('in_progress');
+    if (automatic.state !== 'reserved') return;
+
+    await finishScoreRun(pool!, automatic.runId);
+    expect((await reserveAutomaticScoreRun(pool!, 30)).state).toBe('already_ran');
   });
 
   it('scores a post and writes its signals', async () => {
@@ -283,6 +319,30 @@ describe.skipIf(skipReason !== null)('scorePendingPosts', () => {
     expect(summary.postsScored).toBe(3);
     expect(summary.requestsMade).toBe(4); // 1 failed batch + 3 singles
     expect(await countSignals(pool!)).toBe(3);
+  });
+
+  it('does not let validation retries exceed the daily request budget', async () => {
+    const ids = await seed([
+      post({ title: '$NVDA a' }),
+      post({ title: '$TSLA b' }),
+      post({ title: '$AMD c' }),
+    ]);
+    const model = fakeModel((prompt, call) => {
+      if (call === 1) return ok([{ post_id: ids[0], tickers: [] }]);
+      const id = ids.find((candidate) => prompt.includes(`id="${candidate}"`))!;
+      return ok([{ post_id: id, tickers: [] }]);
+    });
+
+    const summary = await scorePendingPosts(deps(model), {
+      ...OPTIONS,
+      batchSize: 3,
+      dailyRequestBudget: 2,
+    });
+
+    expect(summary.requestsMade).toBe(2);
+    expect(model.calls).toHaveLength(2);
+    expect(summary.postsScored).toBe(1);
+    expect(summary.stoppedEarly).toMatch(/Daily request budget/);
   });
 
   it('records a failure and increments attempts when a single post keeps failing', async () => {

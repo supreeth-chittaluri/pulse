@@ -39,7 +39,7 @@ export function LiveFeed({ signals, onSelect }: { signals: Signal[]; onSelect: (
               </a>
             </div>
             <div className="feed-meta">
-              {signal.source} · {timeAgo(signal.scrapedAt)}
+              {signal.source} · posted {timeAgo(signal.observedAt)}
               {signal.confidence !== null && ` · confidence ${signal.confidence.toFixed(2)}`}
             </div>
           </div>

@@ -30,3 +30,4 @@ export {
   type ScoreOptions,
   type ScoreSummary,
 } from './score.ts';
+export { triagePendingPosts, type TriageSummary } from './triage.ts';

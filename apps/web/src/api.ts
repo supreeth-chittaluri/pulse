@@ -10,7 +10,7 @@ export type Signal = {
   sentimentScore: number;
   confidence: number | null;
   rawExcerpt: string;
-  scrapedAt: string;
+  observedAt: string;
   title: string;
   url: string;
 };
@@ -54,7 +54,9 @@ export type WatchlistEntry = {
 };
 
 export type ScoringStatus = {
+  triagePendingPosts: number;
   pendingPosts: number;
+  failedPosts: number;
   maxPostsPerRun: number;
   batchSize: number;
   estimatedRequestsForNextRun: number;
@@ -63,6 +65,20 @@ export type ScoringStatus = {
   dailyRunLimit: number;
   resetAt: string;
   running: boolean;
+  runningKind: 'manual' | 'automatic' | null;
+  automaticScoringEnabled: boolean;
+  automaticIntervalMinutes: number;
+  lastAutomaticRunAt: string | null;
+  nextAutomaticRunAt: string;
+  requestsUsedToday: number;
+  requestsRemainingToday: number;
+  dailyRequestBudget: number;
+};
+
+export type TriageSummary = {
+  postsConsidered: number;
+  postsCompletedFree: number;
+  postsQueuedForGemini: number;
 };
 
 export type ScoreSummary = {
@@ -81,6 +97,7 @@ export type ScoreSummary = {
 
 export type ScoreRunResult = {
   ok: true;
+  triage: TriageSummary;
   summary: ScoreSummary;
   status: ScoringStatus;
 };

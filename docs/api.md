@@ -53,14 +53,21 @@ Available to anonymous, demo, and admin visitors.
 
 | | |
 |---|---|
-| `GET /api/scoring/status` | Backlog, current run state, daily use, remaining runs, and reset time |
+| `GET /api/scoring/status` | Local-triage and Gemini backlogs, failed posts, automatic schedule, request budget, and manual-run use |
 | `POST /api/scoring/run` | **Spends Gemini quota.** Scores up to 60 queued posts |
 
-The trigger is protected by a durable, app-wide limit of ten accepted runs per
-Pacific quota day, a three-attempts-per-minute client limiter, the 60-post run
-cap, the existing Gemini request budget, and an overlap guard. Once the daily
-limit is used it returns `429 daily_score_limit_reached`; while another run is
+The application normally scores up to 60 candidate posts every 30 minutes. The
+manual trigger is an immediate catch-up option protected by a durable, app-wide
+limit of ten accepted runs per Pacific quota day, a three-attempts-per-minute
+client limiter, the 60-post run cap, and the same overlap lock as automatic
+scoring. Every individual provider call—including validation retries—must first
+reserve space under the shared 400-request daily ceiling. Once the manual limit
+is used it returns `429 daily_score_limit_reached`; while either kind of run is
 active it returns `409 scoring_in_progress`.
+
+Signal objects expose `observedAt`, the source post's publication time (falling
+back to ingestion time), so scoring an old backlog does not make old posts look
+new.
 
 ## Live stream
 

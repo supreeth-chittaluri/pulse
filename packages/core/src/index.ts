@@ -18,13 +18,23 @@ export {
 } from './repositories/runs.ts';
 export {
   selectUnscoredPosts,
+  selectUntriagedPosts,
   countUnscoredPosts,
+  countTriageBacklog,
+  countScoringBacklog,
+  countFailedScoringPosts,
+  writeTriageResults,
   writeScores,
   recordScoreFailure,
   recordLlmRequest,
+  reserveLlmRequest,
+  completeLlmRequest,
   countRequestsToday,
   countSignals,
   type UnscoredPost,
+  type UntriagedPost,
+  type ScoringCandidate,
+  type TriageResult,
   type SignalInput,
   type LlmRequestRecord,
 } from './repositories/signals.ts';
@@ -80,7 +90,10 @@ export {
 export {
   scoreRunStatus,
   reserveScoreRun,
+  reserveAutomaticScoreRun,
   finishScoreRun,
   type ScoreRunStatus,
   type ScoreRunReservation,
+  type AutomaticScoreRunReservation,
+  type ScoreRunKind,
 } from './repositories/score-runs.ts';

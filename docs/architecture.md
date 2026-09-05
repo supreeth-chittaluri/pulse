@@ -10,9 +10,13 @@ measured rather than assumed, the measurement is here too.
       ┌─────────────┐   dedupe on (source, source_post_id)
       │  ingestion  │──────────────────────────────► posts
       └─────────────┘
-             │  posts with no candidate ticker never leave this box
+             │
              ▼
-      ┌─────────────┐   regex + SEC allowlist → Gemini → Zod
+      ┌─────────────┐   free regex + allowlist; durable result
+      │   triage    │──────────────► candidate queue
+      └─────────────┘                         │
+                                            ▼
+      ┌─────────────┐   Gemini every 30 min → Zod
       │   scoring   │──────────────────────────────► signals
       └─────────────┘
              │
@@ -62,6 +66,16 @@ the expensive step gets smaller, and the cheap step is unit-testable.
 
 Measured on 575 real posts: **45% were filtered out locally**, never reaching the
 model. On a 60-post production batch it was 50%.
+
+The filter result is stored on each post. This makes the Postgres-backed queue
+durable across deploys and separates two useful health numbers: raw posts still
+awaiting the free filter, and genuine ticker candidates awaiting Gemini. Posts
+with no candidates are marked complete immediately.
+
+Scoring reserves one automatic run per 30-minute database time slot and handles
+up to 60 candidate posts. Manual and automatic runs use the same advisory lock,
+so they cannot overlap. The public **Score now** control is an optional catch-up
+path, not the scheduler.
 
 The allowlist comes from the SEC's `company_tickers.json`, which contains
 **operating companies only, no ETFs** — so a curated ETF list is merged in.
@@ -174,6 +188,11 @@ wrong the moment it scales.
 Two resources can be spent: Gemini quota (a fixed daily allowance, so exhausting
 it is a denial of service rather than a bill) and Twilio messages (actual money).
 
+Every Gemini call reserves a row before contacting the provider. That single
+transaction-locked reservation path is used by automatic batches, manual
+batches, and validation retries, so concurrency cannot push the application
+past its configured 400-request daily ceiling.
+
 Every guard around them is deliberate, and the abuse audit is a **test** rather
 than a checklist, because checklists get read once and then rot. It proves
 coverage (every route is classified), behaviour (with `fetch` stubbed, no
@@ -191,8 +210,9 @@ could race.
 
 ## What is deliberately not here
 
-- **No queue.** At a few hundred posts a day, Postgres with a cursor is the
-  simpler correct answer, and one less service to keep alive on a free tier.
+- **No external queue service.** At a few hundred posts a day, indexed Postgres
+  rows are the durable queue. This survives restarts without adding Redis or a
+  paid worker.
 - **No ORM.** The queries are the interesting part; hiding them behind a
   builder would obscure the indexes they depend on.
 - **No state library in the frontend.** The data model is small and the

@@ -4,6 +4,7 @@ import { createTwilioNotifier, sendPendingAlerts } from '@pulse/alerting';
 import { ingestSource } from './ingest.ts';
 import { runScheduler } from './scheduler.ts';
 import { detectSpikes } from './spikes.ts';
+import { runAutomaticScoring } from './auto-score.ts';
 
 /**
  * Reddit's .rss limiter is per client across ALL feeds, at roughly one request
@@ -12,6 +13,34 @@ import { detectSpikes } from './spikes.ts';
 export const REDDIT_MIN_INTERVAL_MS = 60_000;
 
 const DETECTION_INTERVAL_MS = 5 * 60 * 1000;
+const SCORING_CHECK_INTERVAL_MS = 60 * 1000;
+
+async function sleepUntilNextCheck(signal: AbortSignal, intervalMs: number): Promise<void> {
+  let remaining = intervalMs;
+  while (remaining > 0 && !signal.aborted) {
+    const chunk = Math.min(remaining, 500);
+    await systemClock.sleep(chunk, signal);
+    remaining -= chunk;
+  }
+}
+
+/** Checks once a minute; the database grants only one run per 30-minute slot. */
+async function scoringLoop(
+  config: Config,
+  pool: Pool,
+  logger: Logger,
+  signal: AbortSignal,
+  intervalMs = SCORING_CHECK_INTERVAL_MS,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      await runAutomaticScoring(config, pool, logger);
+    } catch (err) {
+      logger.error('automatic scoring failed', { error: (err as Error).message });
+    }
+    await sleepUntilNextCheck(signal, intervalMs);
+  }
+}
 
 /**
  * Spike detection, and alerting when it is switched on.
@@ -63,12 +92,7 @@ async function detectionLoop(
       logger.error('spike detection failed', { error: (err as Error).message });
     }
 
-    let remaining = intervalMs;
-    while (remaining > 0 && !signal.aborted) {
-      const chunk = Math.min(remaining, 500);
-      await systemClock.sleep(chunk, signal);
-      remaining -= chunk;
-    }
+    await sleepUntilNextCheck(signal, intervalMs);
   }
 }
 
@@ -81,7 +105,7 @@ export type BackgroundOptions = {
 };
 
 /**
- * Ingestion and detection, running together until `signal` aborts.
+ * Ingestion, scoring and detection, running together until `signal` aborts.
  *
  * Shared by the standalone worker and by the API process. The API needs it
  * because free hosting tiers generally bill background workers but not web
@@ -102,5 +126,6 @@ export async function runBackgroundLoops(options: BackgroundOptions): Promise<vo
       run: (source, childSignal) => ingestSource({ pool, gate, logger }, source, childSignal),
     }),
     detectionLoop(config, pool, logger, signal),
+    scoringLoop(config, pool, logger, signal),
   ]);
 }

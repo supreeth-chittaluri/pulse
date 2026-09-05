@@ -1,7 +1,8 @@
 import {
   countRequestsToday,
-  recordLlmRequest,
+  completeLlmRequest,
   recordScoreFailure,
+  reserveLlmRequest,
   selectUnscoredPosts,
   writeScores,
   type Logger,
@@ -122,7 +123,7 @@ export async function scorePendingPosts(
   const scorable: Array<{ post: UnscoredPost; candidates: Candidate[] }> = [];
   for (const post of posts) {
     const text = post.body ? `${post.title}\n${post.body}` : post.title;
-    const candidates = extractCandidates(text);
+    const candidates = post.candidates ?? extractCandidates(text);
     if (candidates.length === 0) {
       if (!dryRun) await writeScores(pool, post.id, post.source, []);
       summary.skippedNoCandidates += 1;
@@ -140,25 +141,18 @@ export async function scorePendingPosts(
   }
 
   for (const batch of batches) {
-    if (usedToday + summary.requestsMade >= dailyRequestBudget) {
-      summary.stoppedEarly =
-        `Daily request budget of ${dailyRequestBudget} reached ` +
-        `(${usedToday} already used today). Raise GEMINI_DAILY_REQUEST_BUDGET ` +
-        'after checking https://aistudio.google.com/rate-limit, or wait for the ' +
-        'midnight-Pacific reset.';
-      break;
-    }
-
     try {
-      const written = await runBatch(deps, batch);
-      summary.requestsMade += written.requests;
+      const written = await runBatch(deps, batch, dailyRequestBudget);
       summary.postsScored += written.postsScored;
       summary.signalsWritten += written.signals;
       summary.inputTokens += written.inputTokens;
       summary.outputTokens += written.outputTokens;
       summary.failures += written.failures;
+      if (written.stoppedEarly) {
+        summary.stoppedEarly = written.stoppedEarly;
+        break;
+      }
     } catch (err) {
-      summary.requestsMade += 1;
       if (err instanceof QuotaExceededError) {
         summary.stoppedEarly = (err as Error).message;
         logger.error('stopping: provider quota reached', { error: (err as Error).message });
@@ -170,7 +164,9 @@ export async function scorePendingPosts(
     }
   }
 
-  summary.requestsRemainingToday = Math.max(0, dailyRequestBudget - usedToday - summary.requestsMade);
+  const usedAfter = await countRequestsToday(pool, model.provider);
+  summary.requestsMade = Math.max(0, usedAfter - usedToday);
+  summary.requestsRemainingToday = Math.max(0, dailyRequestBudget - usedAfter);
   return summary;
 }
 
@@ -181,11 +177,13 @@ type BatchOutcome = {
   inputTokens: number;
   outputTokens: number;
   failures: number;
+  stoppedEarly: string | null;
 };
 
 async function runBatch(
   deps: ScoreDeps,
   batch: Array<{ post: UnscoredPost; candidates: Candidate[] }>,
+  dailyRequestBudget: number,
 ): Promise<BatchOutcome> {
   const { pool, model, gate, logger } = deps;
 
@@ -198,34 +196,41 @@ async function runBatch(
   }));
   const expectedIds = scorable.map((p) => p.id);
 
-  await gate.acquire(GEMINI_RATE_LIMIT_BUCKET);
-
   const outcome: BatchOutcome = {
-    requests: 1,
+    requests: 0,
     postsScored: 0,
     signals: 0,
     inputTokens: 0,
     outputTokens: 0,
     failures: 0,
+    stoppedEarly: null,
   };
+
+  const requestId = await reserveLlmRequest(
+    pool,
+    { provider: model.provider, model: model.model, postsInBatch: batch.length },
+    dailyRequestBudget,
+  );
+  if (requestId === null) {
+    outcome.stoppedEarly =
+      `Daily request budget of ${dailyRequestBudget} reached ` +
+      `(${dailyRequestBudget} already used today). ` +
+      'Please wait for the midnight-Pacific reset.';
+    return outcome;
+  }
+  outcome.requests = 1;
+
+  await gate.acquire(GEMINI_RATE_LIMIT_BUCKET);
 
   let response;
   try {
     response = await model.generate(SYSTEM_PROMPT, renderBatch(scorable));
   } catch (err) {
-    await recordLlmRequest(pool, {
-      provider: model.provider,
-      model: model.model,
-      postsInBatch: batch.length,
-      error: (err as Error).message,
-    });
+    await completeLlmRequest(pool, requestId, { error: (err as Error).message });
     throw err;
   }
 
-  await recordLlmRequest(pool, {
-    provider: model.provider,
-    model: model.model,
-    postsInBatch: batch.length,
+  await completeLlmRequest(pool, requestId, {
     inputTokens: response.inputTokens,
     outputTokens: response.outputTokens,
     durationMs: response.durationMs,
@@ -246,13 +251,17 @@ async function runBatch(
       });
       for (const single of batch) {
         try {
-          const one = await runBatch(deps, [single]);
+          const one = await runBatch(deps, [single], dailyRequestBudget);
           outcome.requests += one.requests;
           outcome.postsScored += one.postsScored;
           outcome.signals += one.signals;
           outcome.inputTokens += one.inputTokens;
           outcome.outputTokens += one.outputTokens;
           outcome.failures += one.failures;
+          if (one.stoppedEarly) {
+            outcome.stoppedEarly = one.stoppedEarly;
+            break;
+          }
         } catch (singleErr) {
           if (singleErr instanceof QuotaExceededError) throw singleErr;
           outcome.failures += 1;

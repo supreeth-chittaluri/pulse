@@ -8,12 +8,12 @@ Target: a public URL a stranger can open, with **no recurring cost**.
 Neon (free Postgres)  <—  Render web service (free)
                              ├── Express API
                              ├── the built dashboard (same origin)
-                             └── ingestion + spike detection, in-process
+                             └── ingestion + scoring + spike detection, in-process
 GitHub Actions (free) ——> pings /health every 10 min to prevent spin-down
 ```
 
 **One service, not two.** Render's free tier covers web services but not
-background workers, so a $0 deployment runs ingestion and detection inside the
+background workers, so a $0 deployment runs ingestion, scoring and detection inside the
 web process (`RUN_WORKER_IN_API=true`). Locally the standalone worker is still
 the better choice — it restarts independently of the API — but paying for a
 second service to get that in production is not worth it here.
@@ -138,9 +138,11 @@ It proves three things:
    files never reaches `@pulse/scoring` or `@pulse/alerting`. Only the dedicated
    scoring router may import the Gemini client.
 
-The scoring trigger is public but capped at ten app-wide runs per Pacific day,
-60 posts per run, and one running job at a time. The provider-level 400-request
-budget remains a final independent brake.
+Automatic scoring runs every 30 minutes while the service is awake, up to 60
+candidate posts per pass. The public scoring trigger is an optional catch-up
+control capped at ten app-wide manual runs per Pacific day. Both use one shared
+job lock. Every underlying Gemini call (including retries) atomically reserves
+one of the provider-level 400 requests before it is sent.
 
 ### Manual spot check
 
@@ -164,7 +166,8 @@ curl -s -o /dev/null -w '%{http_code}\n' https://YOUR-URL/api/admin/watchlist   
 ## Known limitations, stated rather than hidden
 
 - **Spin-down.** On the free tier, ingestion only runs while the service is
-  awake. The keepalive workflow mitigates it; it does not eliminate it.
+  awake; the same is true of automatic scoring. The keepalive workflow
+  mitigates it; it does not eliminate it.
 - **The rate limiter is in-process.** It resets on restart, and two instances
   would each allow the full budget. Correct for one small instance; a horizontal
   scale-out needs a shared store.
