@@ -193,6 +193,11 @@ a { color: var(--series); }
 
 /* --- table ---------------------------------------------------------------- */
 
+/*
+ * Wide content scrolls inside its own box; the page itself must never scroll
+ * sideways.
+ */
+.table-scroll { width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 th {
   text-align: left;
@@ -212,7 +217,15 @@ th.num, td.num { text-align: right; }
 
 /* --- chart ---------------------------------------------------------------- */
 
-.chart-wrap { position: relative; }
+.chart-wrap { position: relative; width: 100%; }
+
+/*
+ * The SVG carries an explicit pixel width for its coordinate system. Without
+ * this cap that width can exceed a narrow container, widen the layout, and then
+ * be re-measured against the container it just widened -- a feedback loop that
+ * leaves a phone rendering at ~694px instead of 390.
+ */
+.chart-wrap svg { display: block; max-width: 100%; }
 .chart-title { font-size: 0.78rem; color: var(--ink-secondary); margin: 0 0 0.15rem; }
 .tooltip {
   position: absolute;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TrendPoint } from '../api.ts';
 import { formatScore } from '../api.ts';
 
@@ -20,9 +20,13 @@ export function TrendChart({ points, hours }: { points: TrendPoint[]; hours: num
   const [width, setWidth] = useState(640);
   const [hover, setHover] = useState<number | null>(null);
 
-  useEffect(() => {
+  // Layout effect, not effect: measuring after paint means one frame rendered
+  // at the default width, which on a narrow screen is enough to widen the
+  // layout before the correction lands.
+  useLayoutEffect(() => {
     const element = wrapRef.current;
     if (!element) return;
+    setWidth(Math.max(280, element.clientWidth));
     const observer = new ResizeObserver(([entry]) => {
       if (entry) setWidth(Math.max(280, entry.contentRect.width));
     });
@@ -47,9 +51,6 @@ export function TrendChart({ points, hours }: { points: TrendPoint[]; hours: num
     [points],
   );
 
-  if (sorted.length === 0) {
-    return <p className="empty">No activity in the selected window.</p>;
-  }
 
   const times = sorted.map((p) => new Date(p.bucket).getTime());
   const firstTime = times[0]!;
@@ -108,6 +109,18 @@ export function TrendChart({ points, hours }: { points: TrendPoint[]; hours: num
     const time = minTime + (span * i) / Math.max(1, tickCount - 1);
     return { time, label: formatTick(time, hours) };
   });
+
+  // The wrapper is always mounted so the ResizeObserver has something to
+  // observe from the first render. Returning early for the empty state left the
+  // ref unattached, and since the effect only runs on mount it never measured
+  // once the data arrived -- leaving the SVG at its hardcoded default width.
+  if (sorted.length === 0) {
+    return (
+      <div className="chart-wrap" ref={wrapRef}>
+        <p className="empty">No activity in the selected window.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="chart-wrap" ref={wrapRef}>

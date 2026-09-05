@@ -23,17 +23,21 @@ demo login `demo@pulse.local` / `demo-read-only`
   <img alt="PostgreSQL 17" src="https://img.shields.io/badge/PostgreSQL-17-336791?logo=postgresql&logoColor=white">
   <img alt="React and Vite" src="https://img.shields.io/badge/React-Vite-61dafb?logo=react&logoColor=black">
   <img alt="Gemini Flash Lite" src="https://img.shields.io/badge/Gemini-Flash_Lite-8e75b2?logo=googlegemini&logoColor=white">
-  <img alt="247 tests passing" src="https://img.shields.io/badge/tests-247%20passing-4ade80">
+  <img alt="248 tests passing" src="https://img.shields.io/badge/tests-248%20passing-4ade80">
   <img alt="running cost zero dollars" src="https://img.shields.io/badge/running%20cost-%240-4ade80">
   <img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
 
-<!-- Record a GIF of the live feed updating and save it to docs/images/demo.gif -->
-![The dashboard: new signals appear at the top of the live feed as they are scored, each tagged with its ticker and a signed sentiment score, while the trend chart shows sentiment and mention volume for the selected ticker](docs/images/demo.gif)
+![Selecting NVDA draws a week of sentiment and mention volume; hovering the chart reads off a single hour; then a scoring run lands and new signals stream into the live feed without a refresh](docs/images/demo.gif)
 
-<sub>Live feed on the right, updating without a refresh. Sentiment is diverging
-blue/red around a zero baseline; mention volume sits beneath it on its own axis
-rather than sharing one.</sub>
+<sub>NVDA over seven days — sentiment as a diverging line around zero, mention
+volume beneath it on its own axis. Then a real scoring run: the signals arriving
+in the feed are model output, not a mock. One post about Fannie Mae approving
+VantageScore produced three of them — <strong>TRU</strong>,
+<strong>EFX</strong> and <strong>FICO −0.90</strong>, the last being the company
+actually losing its monopoly.</sub>
+
+<img src="docs/images/mobile.png" alt="The same dashboard on a phone: stat tiles stack two-up, the trend chart fits the viewport, and the ticker table scrolls inside its own box" width="280">
 
 > The demo runs on free tiers and sleeps after fifteen minutes idle, so the first
 > load may spend up to a minute waking the service. A sleeping service also

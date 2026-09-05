@@ -17,6 +17,7 @@ export function TickerTable({
   if (tickers.length === 0) return <p className="empty">No tickers scored yet.</p>;
 
   return (
+    <div className="table-scroll">
     <table>
       <thead>
         <tr>
@@ -70,5 +71,6 @@ export function TickerTable({
         ))}
       </tbody>
     </table>
+    </div>
   );
 }

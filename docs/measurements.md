@@ -12,8 +12,13 @@ recorded too — this file is the audit trail, not the highlight reel.
 |---|---|
 | Sources polled | 9 — five subreddits, Hacker News, three per-ticker news queries |
 | Poll interval | 600s (Reddit), 600s (HN), 900s (news) |
-| Posts stored, first sustained run | 575 in ~20 minutes of catch-up, then steady state |
+| **Sustained rate** | **50 posts/hour → ~1,200/day** while the service is awake |
+| Posts stored, first sustained run | 575 in ~20 minutes of catch-up |
 | Duplicate rate at steady state | **35.4%** of fetched posts already stored |
+
+**Method (rate).** Two `/api/stats` samples 18.1 minutes apart against the live
+deployment, pinging `/health` every two minutes throughout so the free tier could
+not sleep mid-window. 602 → 617 posts.
 
 **Method.** `ingest_runs` records every fetch attempt with counts. Over 16 runs:
 890 posts fetched, 575 inserted, 0 errors.
@@ -153,7 +158,7 @@ match the database region; Render's is immutable after creation.
 
 | | |
 |---|---|
-| Tests | **247** across 18 files |
+| Tests | **248** across 18 files |
 | Database-backed | Real throwaway Postgres, not mocks |
 | Simulated trials in the detector suite | ~5,200 per run |
 
