@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import type { Config, Logger, Pool } from '@pulse/core';
@@ -124,6 +126,30 @@ export function createApp({ config, pool, logger, hub, streamOptions }: AppDeps)
     requireRole('admin'),
     adminRoutes(pool, config, logger),
   );
+
+  // Serve the built dashboard from this same origin.
+  //
+  // One origin means no CORS to configure, no cross-site cookie rules, and an
+  // SSE connection that is same-origin by construction -- which is why the
+  // dashboard is served here rather than deployed separately. Mounted after
+  // every API route so it can never shadow one.
+  const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url));
+  if (existsSync(webDist)) {
+    // Asset filenames are content-hashed by the bundler, so they are safe to
+    // cache hard; index.html must not be, or a deploy would not reach anyone.
+    app.use(express.static(webDist, { index: false, maxAge: '1h' }));
+
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' || req.path.startsWith('/api') || req.path === '/health') {
+        next();
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-cache');
+      res.sendFile(join(webDist, 'index.html'));
+    });
+  } else {
+    logger.warn('dashboard build not found; run `npm run build:web`', { webDist });
+  }
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'not_found' });

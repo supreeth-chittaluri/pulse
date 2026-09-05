@@ -16,12 +16,14 @@
     "worker": "node apps/worker/src/cli.ts",
     "dev:api": "node --watch apps/api/src/server.ts",
     "start:api": "node apps/api/src/server.ts",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && npm run typecheck --workspace @pulse/web",
     "test": "vitest run",
     "eval:export": "node scripts/export-eval-set.ts",
     "eval:scoring": "node scripts/eval-scoring.ts",
     "tickers:refresh": "node scripts/refresh-tickers.ts",
-    "db:seed": "node scripts/seed-users.ts"
+    "db:seed": "node scripts/seed-users.ts",
+    "dev:web": "npm run dev --workspace @pulse/web",
+    "build:web": "npm run build --workspace @pulse/web"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

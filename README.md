@@ -4,10 +4,11 @@ Detects unusual sentiment spikes for US equities by continuously ingesting
 retail and news chatter, scoring it with an LLM, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M5 complete.** Scheduled deduped ingestion, on-demand sentiment
+> **Status: M6 complete.** End-to-end: scheduled deduped ingestion, sentiment
 > scoring on Gemini's free tier, rolling-baseline spike detection, a
-> rate-limited API with a three-tier auth model, and live push over SSE. The
-> dashboard is next — see the milestone plan below.
+> rate-limited API with three-tier auth, live push over SSE, and a dashboard
+> that updates without a refresh. SMS alerting is next — see the milestone plan
+> below.
 
 ---
 
@@ -29,6 +30,7 @@ flags statistical deviations from it.
 | Ingestion | RSS/Atom + Reddit OAuth, behind one `Source` interface |
 | Scoring | Gemini Flash Lite (`gemini-3.5-flash-lite`) structured output, free tier |
 | API | Express 5 |
+| Dashboard | React 19 + Vite, no state library, served by the API |
 | Tests | Vitest |
 
 ## Layout
@@ -158,8 +160,8 @@ News front page, and three per-ticker Google News queries.
 | **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | ✅ done |
 | **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | ✅ done |
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | ✅ done |
-| **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | next |
-| **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | |
+| **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | ✅ done |
+| **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | next |
 | **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
 | **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
 
@@ -517,6 +519,58 @@ process under the test runner, socket closes are not delivered dependably —
 `fetch` also tears down a response whose body is never read. The behaviour was
 verified correct against a real out-of-process client; the unit tests pin the
 logic without that ambiguity.
+
+## Dashboard (M6)
+
+```bash
+npm run build:web && npm run start:api   # http://localhost:3000
+```
+
+For UI work, `npm run dev:web` runs Vite with hot reload and proxies `/api` to
+the API on port 3000.
+
+### Served by the API, not deployed separately
+
+One origin means no CORS to configure, no cross-site cookie rules, and an SSE
+connection that is same-origin by construction. The alternative — the SPA on
+Vercel, the API on Render — buys nothing here and costs a CORS surface that M8
+would then have to audit. Express serves the built assets with a long cache
+(filenames are content-hashed) and `index.html` with none, mounted after every
+API route so it can never shadow one.
+
+### Charts
+
+**Sentiment and volume are two stacked plots sharing an x-axis, never a dual
+y-axis.** They are different measures on different scales, and putting two
+y-scales on one frame lets whoever drew it manufacture whatever crossing point
+suits the story. Two plots, one time axis, no illusions.
+
+Sentiment is a **diverging** measure, so it gets two opposite hues with a
+neutral grey midpoint: blue above zero, red below, with the zero baseline drawn
+heavier than the gridlines. Red for bearish matches finance convention; the
+bullish pole is **blue rather than green** because red/green is the classic
+colour-blind failure. The pair was validated rather than eyeballed — CVD
+separation ΔE 21.6 light / 19.2 dark against a ≥ 8 target — and hue never
+carries meaning alone: every score is printed with an explicit sign beside it.
+
+The sentiment axis is pinned to the full −1..+1 range instead of auto-scaling,
+because a rescaled axis makes a trivial wobble look like a crisis. Neutral is
+the same ±0.2 deadband spike detection uses, so the UI never calls something
+bullish that M3 treats as flat — there is a test pinning the two together.
+
+Both themes are selected sets of steps for their own surface, not an inversion,
+and dark mode is declared under the OS preference *and* an explicit theme stamp.
+
+### Auth in the UI
+
+The token is held **in memory only, never `localStorage`** — anything in
+`localStorage` is readable by any script that gets injected into the page.
+Losing the session on refresh is a small price, and the demo account is
+read-only regardless.
+
+Demo shows a banner saying so and renders the watchlist as an explanation
+instead of controls that would 403. The signup form is genuinely refused by the
+server (403 + the private-demo message) rather than pretending to succeed.
 
 ## Cost
 
