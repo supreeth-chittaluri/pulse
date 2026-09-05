@@ -12,10 +12,10 @@ import { hashPassword } from './auth/password.ts';
 /**
  * M8's abuse audit, as a test rather than a checklist.
  *
- * The requirement is that no public or demo-role endpoint can trigger Gemini,
- * Twilio, or an on-demand scrape. On a metered API that would be a bill; on
- * Gemini's fixed free quota and a per-message SMS cost it is worse -- a stranger
- * can exhaust the day's scoring quota, or run up a phone bill, from a browser.
+ * Exactly one public endpoint may trigger Gemini: the manual Score now action.
+ * It is constrained to ten durable global runs per day and 60 posts per run.
+ * Every other public/demo endpoint must remain unable to reach Gemini, Twilio,
+ * or an on-demand scrape.
  *
  * A checklist gets re-read once and then rots. This runs on every commit.
  */
@@ -60,7 +60,7 @@ const silentLogger: Logger = {
   error: () => {},
 };
 
-type Tier = 'anonymous' | 'admin';
+type Tier = 'anonymous' | 'bounded' | 'admin';
 
 /**
  * Every route the application exposes, with the access tier it must enforce.
@@ -82,6 +82,8 @@ const ROUTES: Array<{ method: string; path: string; tier: Tier; body?: unknown }
   // Bounded (~3s) and touches no database, but it is public, so the audit
   // still has to prove it cannot reach a paid provider.
   { method: 'GET', path: '/api/stream/selftest', tier: 'anonymous' },
+  { method: 'GET', path: '/api/scoring/status', tier: 'anonymous' },
+  { method: 'POST', path: '/api/scoring/run', tier: 'bounded' },
 
   { method: 'POST', path: '/api/auth/login', tier: 'anonymous', body: { email: 'a@b.co', password: 'x' } },
   { method: 'GET', path: '/api/auth/me', tier: 'anonymous' },
@@ -91,8 +93,6 @@ const ROUTES: Array<{ method: string; path: string; tier: Tier; body?: unknown }
   { method: 'GET', path: '/api/admin/watchlist', tier: 'admin' },
   { method: 'POST', path: '/api/admin/watchlist', tier: 'admin', body: { tickerOrTopic: 'NVDA' } },
   { method: 'DELETE', path: '/api/admin/watchlist/NVDA', tier: 'admin' },
-  { method: 'GET', path: '/api/admin/scoring-status', tier: 'admin' },
-  { method: 'POST', path: '/api/admin/score', tier: 'admin', body: { limit: 1 } },
 ];
 
 /**
@@ -148,7 +148,7 @@ async function login(email: string, password: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  if (skipReason) return;
+  if (skipReason !== null) return;
   app = createApp({
     config: makeTestConfig({
       databaseUrl: withDatabase(baseUrl, TEST_DATABASE),
@@ -187,8 +187,9 @@ afterAll(async () => {
   await pool?.end();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   app?.resetState();
+  await pool?.query('truncate score_runs restart identity');
 });
 
 describe.skipIf(skipReason !== null)('route inventory', () => {
@@ -208,11 +209,13 @@ describe.skipIf(skipReason !== null)('route inventory', () => {
     // +1 for the SSE stream route, audited separately because it holds a socket.
     // +1 for POST /api/auth/login, which is registered twice (once to attach the
     // stricter login rate limiter, once by the auth router).
-    expect(ROUTES.length + 2).toBe(exposed);
+    // +1 for POST /api/scoring/run, likewise registered once for its dedicated
+    // short-window limiter and once inside the scoring router.
+    expect(ROUTES.length + 3).toBe(exposed);
   });
 });
 
-describe.skipIf(skipReason !== null)('no anonymous or demo route can spend money', () => {
+describe.skipIf(skipReason !== null)('ordinary anonymous and demo routes cannot spend money', () => {
   /**
    * Gemini and Twilio are both reached over global fetch, and so is every
    * ingestion source. Stubbing it and asserting zero calls therefore covers all
@@ -223,7 +226,7 @@ describe.skipIf(skipReason !== null)('no anonymous or demo route can spend money
     const spy = vi.spyOn(globalThis, 'fetch');
     try {
       for (const route of ROUTES) {
-        if (route.tier === 'admin') continue;
+        if (route.tier !== 'anonymous') continue;
         await call(route.method, route.path, { token, body: route.body });
       }
       expect(spy.mock.calls.map((c) => String(c[0])), `${label} triggered an outbound request`)
@@ -262,11 +265,11 @@ describe.skipIf(skipReason !== null)('no anonymous or demo route can spend money
   });
 });
 
-describe.skipIf(skipReason !== null)('the money-spending routes are admin-only', () => {
-  const spenders = ROUTES.filter((r) => r.tier === 'admin');
+describe.skipIf(skipReason !== null)('admin-only mutations remain protected', () => {
+  const adminRoutes = ROUTES.filter((r) => r.tier === 'admin');
 
   it('rejects every admin route without a token', async () => {
-    for (const route of spenders) {
+    for (const route of adminRoutes) {
       const result = await call(route.method, route.path, { body: route.body });
       expect(result.status, `${route.method} ${route.path}`).toBe(401);
     }
@@ -274,33 +277,37 @@ describe.skipIf(skipReason !== null)('the money-spending routes are admin-only',
 
   it('rejects every admin route for the demo role', async () => {
     const token = await login('demo@pulse.local', DEMO_PASSWORD);
-    for (const route of spenders) {
+    for (const route of adminRoutes) {
       const result = await call(route.method, route.path, { token, body: route.body });
       expect(result.status, `${route.method} ${route.path}`).toBe(403);
     }
   });
 
-  // The single most dangerous endpoint: on a fixed free quota, an unauthorised
-  // caller draining it is a denial of service, not just a cost.
-  it('never reaches Gemini for a non-admin caller on the scoring trigger', async () => {
-    const demoToken = await login('demo@pulse.local', DEMO_PASSWORD);
+});
+
+describe.skipIf(skipReason !== null)('public scoring has durable spending bounds', () => {
+  it('cannot reach Gemini after the global daily limit is used', async () => {
+    await pool!.query('insert into score_runs (completed_at) select now() from generate_series(1, 10)');
     const spy = vi.spyOn(globalThis, 'fetch');
     try {
-      expect((await call('POST', '/api/admin/score', { body: { limit: 1 } })).status).toBe(401);
-      expect((await call('POST', '/api/admin/score', { token: demoToken, body: { limit: 1 } })).status).toBe(403);
+      const result = await call('POST', '/api/scoring/run');
+      expect(result.status).toBe(429);
+      expect(JSON.parse(result.body).error).toBe('daily_score_limit_reached');
       expect(spy.mock.calls).toEqual([]);
     } finally {
       spy.mockRestore();
     }
   });
 
-  it('caps how much quota even a valid admin call can spend at once', async () => {
-    const token = await login('admin@pulse.local', ADMIN_PASSWORD);
-    const result = await call('POST', '/api/admin/score', { token, body: { limit: 5000 } });
-    // A stolen admin token must not be able to drain the day in one request.
-    expect(result.status).toBe(400);
-    const issues = (JSON.parse(result.body) as { issues: Array<{ maximum: number }> }).issues;
-    expect(issues[0]?.maximum).toBe(60);
+  it('cannot launch a second Gemini job while one is running', async () => {
+    await pool!.query('insert into score_runs default values');
+    const spy = vi.spyOn(globalThis, 'fetch');
+    try {
+      expect((await call('POST', '/api/scoring/run')).status).toBe(409);
+      expect(spy.mock.calls).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -343,10 +350,15 @@ describe('public route modules cannot reach a paid provider', () => {
     });
   }
 
-  it('the admin routes are the only place a paid provider is imported', () => {
-    const graph = reachable(resolve(apiSrc, 'routes/admin.ts'));
-    // Stated positively so the test fails if scoring is ever moved somewhere
-    // less guarded and this file quietly stops importing it.
+  it('only the explicitly bounded scoring route reaches Gemini', () => {
+    const entry = resolve(apiSrc, 'routes/scoring.ts');
+    const graph = reachable(entry);
+    const source = readFileSync(entry, 'utf8');
     expect([...graph]).toContain('@pulse/scoring');
+    expect(source).toContain('DAILY_SCORE_RUN_LIMIT = 10');
+    expect(source).toContain('SCORE_POST_LIMIT = 60');
+    expect(source).toContain('reserveScoreRun');
+
+    expect([...reachable(resolve(apiSrc, 'routes/admin.ts'))]).not.toContain('@pulse/scoring');
   });
 });

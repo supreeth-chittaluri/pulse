@@ -53,6 +53,38 @@ export type WatchlistEntry = {
   lastAlertedAt: string | null;
 };
 
+export type ScoringStatus = {
+  pendingPosts: number;
+  maxPostsPerRun: number;
+  batchSize: number;
+  estimatedRequestsForNextRun: number;
+  runsUsedToday: number;
+  runsRemainingToday: number;
+  dailyRunLimit: number;
+  resetAt: string;
+  running: boolean;
+};
+
+export type ScoreSummary = {
+  postsConsidered: number;
+  skippedNoCandidates: number;
+  postsSent: number;
+  postsScored: number;
+  signalsWritten: number;
+  requestsMade: number;
+  requestsRemainingToday: number;
+  inputTokens: number;
+  outputTokens: number;
+  failures: number;
+  stoppedEarly: string | null;
+};
+
+export type ScoreRunResult = {
+  ok: true;
+  summary: ScoreSummary;
+  status: ScoringStatus;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -113,6 +145,12 @@ export const api = {
     request<{ ticker: string; trend: TrendPoint[]; signals: Signal[] }>(
       `/api/tickers/${encodeURIComponent(ticker)}?hours=${hours}`,
     ),
+
+  scoringStatus: () => request<ScoringStatus>('/api/scoring/status'),
+  scoreNow: () =>
+    request<ScoreRunResult>('/api/scoring/run', {
+      method: 'POST',
+    }),
 
   login: (email: string, password: string) =>
     request<{ token: string; role: Role; email: string }>('/api/auth/login', {

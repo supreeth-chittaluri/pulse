@@ -17,6 +17,7 @@ import { SpikePanel } from './components/SpikePanel.tsx';
 import { TrendChart } from './components/TrendChart.tsx';
 import { Watchlist } from './components/Watchlist.tsx';
 import { AuthDialog } from './components/AuthDialog.tsx';
+import { ScoreNow } from './components/ScoreNow.tsx';
 
 const FEED_LIMIT = 60;
 const TREND_RANGES = [24, 168, 720] as const;
@@ -50,13 +51,15 @@ export function App() {
     }
   }, []);
 
+  const refreshSignals = useCallback(async () => {
+    const result = await api.signals(FEED_LIMIT);
+    setSignals(result.signals);
+  }, []);
+
   useEffect(() => {
     void refreshSummaries();
-    void api
-      .signals(FEED_LIMIT)
-      .then((result) => setSignals(result.signals))
-      .catch(() => {});
-  }, [refreshSummaries]);
+    void refreshSignals().catch(() => {});
+  }, [refreshSignals, refreshSummaries]);
 
   useEffect(() => {
     if (!selected) {
@@ -156,6 +159,12 @@ export function App() {
           live data, and admin actions such as editing watchlist thresholds are disabled.
         </div>
       )}
+
+      <ScoreNow
+        onScored={async () => {
+          await Promise.all([refreshSummaries(), refreshSignals()]);
+        }}
+      />
 
       <StatTiles stats={stats} />
 

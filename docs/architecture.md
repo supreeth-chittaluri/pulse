@@ -147,9 +147,11 @@ exactly the configuration it existed to catch.
 
 ## API and auth
 
-Three tiers: **anonymous** (all reads, no token — M8 requires a stranger to load
-the dashboard), **demo** (identical reads plus a signed-in UI state, no extra
-data access), **admin** (writes, and anything that spends a finite resource).
+Three tiers: **anonymous** (all reads plus globally bounded manual scoring),
+**demo** (the same capabilities plus a signed-in UI state), and **admin**
+(watchlist mutations). Manual scoring is the deliberate exception to the
+otherwise read-only public surface: ten app-wide runs per Pacific day, 60 posts
+per run, and one active run at a time.
 
 `requireRole('admin')` sits on the *mount*, not on individual routes, so a route
 added later inherits the guard instead of needing to remember it.

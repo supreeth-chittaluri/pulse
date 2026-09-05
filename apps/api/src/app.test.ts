@@ -68,10 +68,8 @@ let config: Config;
 /** Every mutating route under /api/admin, as the acceptance test enumerates them. */
 const ADMIN_ROUTES: Array<{ method: string; path: string; body?: unknown }> = [
   { method: 'GET', path: '/api/admin/watchlist' },
-  { method: 'GET', path: '/api/admin/scoring-status' },
   { method: 'POST', path: '/api/admin/watchlist', body: { tickerOrTopic: 'NVDA' } },
   { method: 'DELETE', path: '/api/admin/watchlist/NVDA' },
-  { method: 'POST', path: '/api/admin/score', body: { limit: 1 } },
 ];
 
 async function call(
@@ -107,8 +105,16 @@ async function login(email: string, password: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  if (skipReason) return;
-  config = makeTestConfig({ databaseUrl: withDatabase(baseUrl, TEST_DATABASE) });
+  if (skipReason !== null) return;
+  config = makeTestConfig({
+    databaseUrl: withDatabase(baseUrl, TEST_DATABASE),
+    gemini: {
+      apiKey: 'test-key',
+      model: 'gemini-3.5-flash-lite',
+      minIntervalMs: 0,
+      dailyRequestBudget: 400,
+    },
+  });
   app = createApp({ config, pool: pool!, logger: silentLogger });
   server = app.listen(0);
   await new Promise<void>((r) => server.once('listening', r));
@@ -123,14 +129,22 @@ afterAll(async () => {
   await pool?.end();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   app?.resetState();
+  await pool?.query('truncate score_runs restart identity');
 });
 
 describe.skipIf(skipReason !== null)('anonymous access', () => {
   // M8's acceptance criterion, asserted here rather than discovered at deploy.
   it('serves every read endpoint with no token at all', async () => {
-    for (const path of ['/health', '/api/stats', '/api/signals', '/api/spikes', '/api/tickers']) {
+    for (const path of [
+      '/health',
+      '/api/stats',
+      '/api/signals',
+      '/api/spikes',
+      '/api/tickers',
+      '/api/scoring/status',
+    ]) {
       const { status } = await call(path);
       expect(status, path).toBe(200);
     }
@@ -150,6 +164,35 @@ describe.skipIf(skipReason !== null)('anonymous access', () => {
     const { status, body } = await call('/api/nope');
     expect(status).toBe(404);
     expect(body).toEqual({ error: 'not_found' });
+  });
+
+  it('allows a public scoring run and reports the remaining global allowance', async () => {
+    const { status, body } = await call('/api/scoring/run', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.summary.postsConsidered).toBe(0);
+    expect(body.status).toMatchObject({
+      dailyRunLimit: 10,
+      runsUsedToday: 1,
+      runsRemainingToday: 9,
+    });
+  });
+
+  it('enforces the ten-run daily limit in Postgres', async () => {
+    await pool!.query('insert into score_runs (completed_at) select now() from generate_series(1, 10)');
+
+    const { status, body } = await call('/api/scoring/run', { method: 'POST' });
+    expect(status).toBe(429);
+    expect(body.error).toBe('daily_score_limit_reached');
+    expect(body.message).toContain('midnight Pacific');
+    expect(body.status.runsRemainingToday).toBe(0);
+  });
+
+  it('rejects an overlapping scoring run', async () => {
+    await pool!.query('insert into score_runs default values');
+
+    const { status, body } = await call('/api/scoring/run', { method: 'POST' });
+    expect(status).toBe(409);
+    expect(body.error).toBe('scoring_in_progress');
   });
 });
 

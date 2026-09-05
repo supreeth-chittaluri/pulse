@@ -1,7 +1,7 @@
 -- M5: publish row inserts so the API can push them to connected browsers.
 --
 -- Done with a trigger rather than an application-level notify call, so EVERY
--- writer publishes: the worker, POST /api/admin/score, M7's alerting, and any
+-- writer publishes: the worker, POST /api/scoring/run, M7's alerting, and any
 -- manual insert. An app-level publish is a thing someone forgets exactly once,
 -- after which the stream is quietly incomplete.
 --

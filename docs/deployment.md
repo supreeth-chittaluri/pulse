@@ -130,19 +130,17 @@ It proves three things:
 
 1. **Coverage.** Every route the Express router exposes is classified. Adding a
    route without classifying it fails the audit.
-2. **Behaviour.** With `global.fetch` stubbed, every anonymous and demo-role
-   route is called and **zero outbound requests** are made. Gemini, Twilio and
-   every ingestion source all go over `fetch`, so one assertion covers all three
-   hazards. This runs against a *fully configured* instance — real-looking
-   credentials present — so it proves the guards hold, not merely that an
-   unconfigured box cannot spend.
-3. **Structure.** The module graph reachable from the anonymous route files
-   never reaches `@pulse/scoring` or `@pulse/alerting`. A future edit that wires
-   one in fails immediately rather than at the first surprise invoice.
+2. **Behaviour.** With `global.fetch` stubbed, every ordinary anonymous and
+   demo-role route is called and **zero outbound requests** are made. The one
+   intentional exception is the manual scoring route, which is audited
+   separately against its database-backed limits.
+3. **Structure.** The module graph reachable from ordinary anonymous route
+   files never reaches `@pulse/scoring` or `@pulse/alerting`. Only the dedicated
+   scoring router may import the Gemini client.
 
-Plus: the scoring trigger is admin-only (401 anonymous, 403 demo) and capped at
-60 posts per call, so even a stolen admin token cannot drain the day's quota in
-one request.
+The scoring trigger is public but capped at ten app-wide runs per Pacific day,
+60 posts per run, and one running job at a time. The provider-level 400-request
+budget remains a final independent brake.
 
 ### Manual spot check
 

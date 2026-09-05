@@ -77,3 +77,10 @@ export {
   type AlertRecord,
   type SentAlert,
 } from './repositories/alerts.ts';
+export {
+  scoreRunStatus,
+  reserveScoreRun,
+  finishScoreRun,
+  type ScoreRunStatus,
+  type ScoreRunReservation,
+} from './repositories/score-runs.ts';

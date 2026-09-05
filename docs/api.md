@@ -1,9 +1,8 @@
 # HTTP API
 
-Three access tiers. **Anonymous** covers every read, because a stranger has to
-be able to open the dashboard with no login. **Demo** is anonymous plus a
-signed-in UI state and deliberately no extra data access. **Admin** covers
-writes and anything that spends a finite resource.
+Three access tiers. **Anonymous** covers every read plus the globally bounded
+manual scoring action. **Demo** is anonymous plus a signed-in UI state and
+deliberately no extra data access. **Admin** covers watchlist mutations.
 
 Base URL: the deployment root. The dashboard is served from the same origin, so
 there is no CORS hop.
@@ -47,13 +46,21 @@ Bearer token with the `admin` role. Anonymous gets 401, demo gets 403.
 | `GET /api/admin/watchlist` | Tickers being watched and their alert thresholds |
 | `POST /api/admin/watchlist` | `{ tickerOrTopic, alertThreshold }` |
 | `DELETE /api/admin/watchlist/:ticker` | Remove one |
-| `GET /api/admin/scoring-status` | Backlog size, quota used today, estimated requests |
-| `POST /api/admin/score` | **Spends Gemini quota.** Capped at 60 posts per call |
 
-`POST /api/admin/score` is the most sensitive route in the application. On a
-fixed free quota an unauthorised caller is a denial of service rather than a
-bill, so it sits behind the role guard, a stricter rate-limit bucket, and a hard
-per-call cap that a stolen token cannot exceed.
+## Manual scoring
+
+Available to anonymous, demo, and admin visitors.
+
+| | |
+|---|---|
+| `GET /api/scoring/status` | Backlog, current run state, daily use, remaining runs, and reset time |
+| `POST /api/scoring/run` | **Spends Gemini quota.** Scores up to 60 queued posts |
+
+The trigger is protected by a durable, app-wide limit of ten accepted runs per
+Pacific quota day, a three-attempts-per-minute client limiter, the 60-post run
+cap, the existing Gemini request budget, and an overlap guard. Once the daily
+limit is used it returns `429 daily_score_limit_reached`; while another run is
+active it returns `409 scoring_in_progress`.
 
 ## Live stream
 

@@ -10,6 +10,7 @@ import { responseCache, type ResponseCache } from './middleware/cache.ts';
 import { publicRoutes } from './routes/public.ts';
 import { authRoutes } from './routes/auth.ts';
 import { adminRoutes } from './routes/admin.ts';
+import { scoringRoutes } from './routes/scoring.ts';
 import { streamRoutes, type StreamOptions } from './routes/stream.ts';
 import { StreamHub } from './stream/hub.ts';
 
@@ -38,11 +39,12 @@ export type PulseApp = Express & {
 /**
  * Three access tiers, and the boundary sits in exactly one place:
  *
- *   anonymous  every read. M8 requires a stranger to load the dashboard with
- *              no login, so these take no token at all.
+ *   anonymous  every read plus the globally capped manual scoring trigger.
+ *              M8 requires a stranger to load the dashboard with no login.
  *   demo       identical reads plus a signed-in UI state. Deliberately grants
  *              no extra data access; it exists for the M6 narrative.
- *   admin      writes, and anything that spends a finite resource.
+ *   admin      watchlist mutations. Manual scoring is the deliberately bounded
+ *              public exception.
  */
 export function createApp({
   config,
@@ -89,6 +91,9 @@ export function createApp({
   });
   // Brute-force protection on the only endpoint that checks a password.
   const loginLimiter: RateLimiter = rateLimit({ limit: 10, bucket: 'login' });
+  // This short-window limiter prevents one client from racing the global daily
+  // cap. The durable ten-per-day limit is enforced separately in Postgres.
+  const scoringLimiter: RateLimiter = rateLimit({ limit: 3, bucket: 'scoring' });
   const cache: ResponseCache = responseCache({ ttlSeconds: config.http.cacheTtlSeconds });
 
   app.use(attachUser(config.auth.jwtSecret));
@@ -135,6 +140,9 @@ export function createApp({
     res.sendFile(fileURLToPath(new URL('../public/stream.html', import.meta.url)));
   });
 
+  app.post('/api/scoring/run', scoringLimiter);
+  app.use('/api/scoring', publicLimiter, scoringRoutes(pool, config, logger));
+
   app.use('/api', publicLimiter, cache, publicRoutes(pool));
 
   // requireRole sits on the mount, so it cannot be forgotten on an individual
@@ -144,7 +152,7 @@ export function createApp({
     '/api/admin',
     adminLimiter,
     requireRole('admin'),
-    adminRoutes(pool, config, logger),
+    adminRoutes(pool, logger),
   );
 
   // Serve the built dashboard from this same origin.
@@ -188,6 +196,7 @@ export function createApp({
     publicLimiter.reset();
     adminLimiter.reset();
     loginLimiter.reset();
+    scoringLimiter.reset();
     cache.reset();
   };
 

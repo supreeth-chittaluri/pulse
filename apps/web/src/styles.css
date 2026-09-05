@@ -145,6 +145,34 @@ a { color: var(--series); }
 .columns { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); align-items: start; }
 @media (max-width: 900px) { .columns { grid-template-columns: minmax(0, 1fr); } }
 
+/* --- manual scoring ------------------------------------------------------ */
+
+.score-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.score-card > div { min-width: 0; }
+.score-card h2 { margin-bottom: 0.25rem; }
+.score-description { margin: 0; color: var(--ink-secondary); font-size: 0.82rem; }
+.score-meta {
+  display: flex;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.score-message { margin: 0.4rem 0 0; color: var(--good); font-size: 0.8rem; }
+.score-card .error { margin: 0.4rem 0 0; }
+.score-button { margin-left: auto; flex: 0 0 auto; min-width: 9.25rem; }
+@media (max-width: 620px) {
+  .score-card { align-items: stretch; flex-direction: column; }
+  .score-button { margin-left: 0; width: 100%; }
+}
+
 /* --- stat tiles ----------------------------------------------------------- */
 
 .tile-label {
