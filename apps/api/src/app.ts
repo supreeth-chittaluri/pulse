@@ -109,6 +109,11 @@ export function createApp({
       scoringModel: config.gemini.model,
       streamSource: streamSource ?? 'unknown',
       workerInProcess: config.runWorkerInApi,
+      // Which commit is actually serving. Without this there is no way to tell
+      // a redeploy from a free-tier spin-down/wake, and every check made
+      // against the live URL is really a check against an unknown build.
+      // Render sets RENDER_GIT_COMMIT automatically.
+      commit: (process.env.RENDER_GIT_COMMIT ?? 'local').slice(0, 7),
       sources: buildSources(config).length,
       uptimeSeconds: Math.round(process.uptime()),
     });
