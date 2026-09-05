@@ -14,7 +14,7 @@ export type SignalRow = {
   sentimentScore: number;
   confidence: number | null;
   rawExcerpt: string;
-  scrapedAt: Date;
+  observedAt: Date;
   title: string;
   url: string;
 };
@@ -34,17 +34,18 @@ export async function selectSignals(pool: Pool, query: SignalQuery): Promise<Sig
     sentiment_score: number;
     confidence: number | null;
     raw_excerpt: string;
-    scraped_at: Date;
+    observed_at: Date;
     title: string;
     url: string;
   }>(
     `select s.id, s.post_id, s.source, s.ticker_or_topic, s.sentiment_score,
-            s.confidence, s.raw_excerpt, s.scraped_at, p.title, p.url
+            s.confidence, s.raw_excerpt,
+            coalesce(p.posted_at, p.scraped_at) as observed_at, p.title, p.url
        from signals s
        join posts p on p.id = s.post_id
       where ($1::text is null or s.ticker_or_topic = $1)
-        and ($2::timestamptz is null or s.scraped_at >= $2)
-      order by s.scraped_at desc
+        and ($2::timestamptz is null or coalesce(p.posted_at, p.scraped_at) >= $2)
+      order by observed_at desc, s.id desc
       limit $3`,
     [query.ticker ?? null, query.since ?? null, query.limit],
   );
@@ -57,7 +58,7 @@ export async function selectSignals(pool: Pool, query: SignalQuery): Promise<Sig
     sentimentScore: row.sentiment_score,
     confidence: row.confidence,
     rawExcerpt: row.raw_excerpt,
-    scrapedAt: row.scraped_at,
+    observedAt: row.observed_at,
     title: row.title,
     url: row.url,
   }));
@@ -87,10 +88,11 @@ export async function selectTickerSummaries(
     `select s.ticker_or_topic,
             count(*)                as mentions,
             avg(s.sentiment_score)  as avg_sentiment,
-            max(s.scraped_at)       as last_seen_at,
+            max(coalesce(p.posted_at, p.scraped_at)) as last_seen_at,
             b.rolling_avg,
             b.rolling_avg_volume
        from signals s
+       join posts p on p.id = s.post_id
        left join baselines b on b.ticker_or_topic = s.ticker_or_topic
       group by s.ticker_or_topic, b.rolling_avg, b.rolling_avg_volume
       order by count(*) desc
@@ -234,12 +236,13 @@ export async function selectSignalsAfterId(
     sentiment_score: number;
     confidence: number | null;
     raw_excerpt: string;
-    scraped_at: Date;
+    observed_at: Date;
     title: string;
     url: string;
   }>(
     `select s.id, s.post_id, s.source, s.ticker_or_topic, s.sentiment_score,
-            s.confidence, s.raw_excerpt, s.scraped_at, p.title, p.url
+            s.confidence, s.raw_excerpt,
+            coalesce(p.posted_at, p.scraped_at) as observed_at, p.title, p.url
        from signals s
        join posts p on p.id = s.post_id
       where s.id > $1
@@ -255,7 +258,7 @@ export async function selectSignalsAfterId(
     sentimentScore: row.sentiment_score,
     confidence: row.confidence,
     rawExcerpt: row.raw_excerpt,
-    scrapedAt: row.scraped_at,
+    observedAt: row.observed_at,
     title: row.title,
     url: row.url,
   }));
