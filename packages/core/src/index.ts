@@ -68,3 +68,12 @@ export {
   selectMaxIds,
   type MaxIds,
 } from './repositories/queries.ts';
+export {
+  selectAlertableSpikes,
+  recordAlert,
+  countAlertsToday,
+  recentAlerts,
+  type PendingSpike,
+  type AlertRecord,
+  type SentAlert,
+} from './repositories/alerts.ts';

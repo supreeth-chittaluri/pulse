@@ -18,6 +18,15 @@ export function makeTestConfig(overrides: Partial<Config> = {}): Config {
       dailyRequestBudget: 400,
     },
     scoring: { batchSize: 15 },
+    alerts: {
+      enabled: false,
+      configured: false,
+      twilio: {},
+      kind: 'volume+sentiment',
+      cooldownHours: 6,
+      dailyBudget: 10,
+      maxSpikeAgeHours: 6,
+    },
     auth: { jwtSecret: 'test-secret-that-is-at-least-32-characters', jwtTtlHours: 12 },
     http: {
       corsOrigins: [],

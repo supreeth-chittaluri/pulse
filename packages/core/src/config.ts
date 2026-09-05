@@ -33,6 +33,20 @@ const envSchema = z.object({
   // Render/Fly/Vercel put a proxy in front of us. Without this every request
   // appears to come from the proxy and one client throttles everyone.
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+
+  // M7. COSTS MONEY -- alerting stays off until ALERTS_ENABLED is true.
+  ALERTS_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value === 'true'),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_FROM_NUMBER: z.string().optional(),
+  TWILIO_TO_NUMBER: z.string().optional(),
+  ALERT_KIND: z.enum(['volume+sentiment', 'any']).default('volume+sentiment'),
+  ALERT_COOLDOWN_HOURS: z.coerce.number().int().min(0).default(6),
+  ALERT_DAILY_BUDGET: z.coerce.number().int().min(0).default(10),
+  ALERT_MAX_SPIKE_AGE_HOURS: z.coerce.number().int().min(1).default(6),
 });
 
 export type Config = {
@@ -51,6 +65,15 @@ export type Config = {
   };
   scoring: { batchSize: number };
   auth: { jwtSecret: string; jwtTtlHours: number };
+  alerts: {
+    enabled: boolean;
+    configured: boolean;
+    twilio: { accountSid?: string; authToken?: string; from?: string; to?: string };
+    kind: 'volume+sentiment' | 'any';
+    cooldownHours: number;
+    dailyBudget: number;
+    maxSpikeAgeHours: number;
+  };
   http: {
     corsOrigins: string[];
     rateLimitPerMinute: number;
@@ -126,6 +149,25 @@ export function loadConfig(): Config {
     },
     scoring: { batchSize: env.SCORING_BATCH_SIZE },
     auth: { jwtSecret: resolveJwtSecret(env.JWT_SECRET, env.NODE_ENV), jwtTtlHours: env.JWT_TTL_HOURS },
+    alerts: {
+      enabled: env.ALERTS_ENABLED,
+      configured: Boolean(
+        env.TWILIO_ACCOUNT_SID &&
+          env.TWILIO_AUTH_TOKEN &&
+          env.TWILIO_FROM_NUMBER &&
+          env.TWILIO_TO_NUMBER,
+      ),
+      twilio: {
+        accountSid: env.TWILIO_ACCOUNT_SID,
+        authToken: env.TWILIO_AUTH_TOKEN,
+        from: env.TWILIO_FROM_NUMBER,
+        to: env.TWILIO_TO_NUMBER,
+      },
+      kind: env.ALERT_KIND,
+      cooldownHours: env.ALERT_COOLDOWN_HOURS,
+      dailyBudget: env.ALERT_DAILY_BUDGET,
+      maxSpikeAgeHours: env.ALERT_MAX_SPIKE_AGE_HOURS,
+    },
     http: {
       corsOrigins: env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
       rateLimitPerMinute: env.RATE_LIMIT_PER_MINUTE,

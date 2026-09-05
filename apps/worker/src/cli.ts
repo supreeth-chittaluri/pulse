@@ -9,6 +9,8 @@
  *   npm run worker -- score-once --dry-run                        (cost/quota preview)
  *   npm run worker -- score-once --limit 60                       (send to Gemini)
  *   npm run worker -- detect-spikes                               (free, no API)
+ *   npm run worker -- alerts --dry-run                            (render, send nothing)
+ *   npm run worker -- alerts                                      (SENDS SMS, costs money)
  */
 import { parseArgs } from 'node:util';
 import {
@@ -29,6 +31,7 @@ import {
   GEMINI_RATE_LIMIT_BUCKET,
 } from '@pulse/scoring';
 import { HOUR_MS, latestCompleteWindow } from '@pulse/analysis';
+import { createTwilioNotifier, sendPendingAlerts } from '@pulse/alerting';
 import { detectSpikes } from './spikes.ts';
 import { ingestSource } from './ingest.ts';
 import { runScheduler } from './scheduler.ts';
@@ -44,6 +47,7 @@ Commands:
   status                      Show stored post counts and the last run per source
   score-once                  Score pending posts with Gemini (on demand only)
   detect-spikes               Recompute baselines and flag spikes (free)
+  alerts                      Send SMS for pending spikes (COSTS MONEY)
 
 Options:
   --source <id>   Source id from config/sources.json
@@ -53,6 +57,7 @@ Options:
   --dry-run       score-once: report what would be sent, call nothing
                   detect-spikes: compute baselines, record no spikes
   --window        detect-spikes: hours back to test (default: last full hour)
+                  alerts: --dry-run renders messages without sending
   --json          fetch-once: print raw JSON
   --help          Show this message
 `.trim();
@@ -184,6 +189,7 @@ async function ingestOnce(pool: Pool, sources: Source[], logger: Logger): Promis
  * the unique constraint on (ticker, window_start) makes repeats free.
  */
 async function detectionLoop(
+  config: Config,
   pool: Pool,
   logger: Logger,
   signal: AbortSignal,
@@ -197,6 +203,29 @@ async function detectionLoop(
           recorded: summary.recorded,
           tickers: summary.tickersConsidered,
         });
+        // Alerting is opt-in because it spends money on every message. Detection
+        // itself always runs; only the texting is gated.
+        if (config.alerts.enabled && config.alerts.configured) {
+          const alerts = await sendPendingAlerts(
+            {
+              pool,
+              notifier: createTwilioNotifier({
+                accountSid: config.alerts.twilio.accountSid!,
+                authToken: config.alerts.twilio.authToken!,
+                from: config.alerts.twilio.from!,
+              }),
+              logger,
+              to: config.alerts.twilio.to!,
+            },
+            {
+              kind: config.alerts.kind,
+              cooldownHours: config.alerts.cooldownHours,
+              dailyBudget: config.alerts.dailyBudget,
+              maxSpikeAgeHours: config.alerts.maxSpikeAgeHours,
+            },
+          );
+          if (alerts.sent > 0) logger.info('alerts sent', { sent: alerts.sent });
+        }
       }
     } catch (err) {
       // Detection failing must never take ingestion down with it.
@@ -212,7 +241,12 @@ async function detectionLoop(
   }
 }
 
-async function run(pool: Pool, sources: Source[], logger: Logger): Promise<number> {
+async function run(
+  config: Config,
+  pool: Pool,
+  sources: Source[],
+  logger: Logger,
+): Promise<number> {
   const gate = new MinIntervalGate(REDDIT_MIN_INTERVAL_MS);
   const controller = new AbortController();
 
@@ -237,7 +271,7 @@ async function run(pool: Pool, sources: Source[], logger: Logger): Promise<numbe
       runImmediately: true,
       run: (source, signal) => ingestSource({ pool, gate, logger }, source, signal),
     }),
-    detectionLoop(pool, logger, controller.signal),
+    detectionLoop(config, pool, logger, controller.signal),
   ]);
 
   return 0;
@@ -365,6 +399,81 @@ async function detectSpikesCommand(
   return 0;
 }
 
+/**
+ * SMS alerting. The only command in the project that spends money per call.
+ *
+ * Off unless ALERTS_ENABLED=true, and even then bounded by a per-ticker
+ * cooldown, a spike-age cutoff, and a rolling daily budget.
+ */
+async function alertsCommand(
+  config: Config,
+  pool: Pool,
+  logger: Logger,
+  values: { 'dry-run'?: boolean },
+): Promise<number> {
+  const dryRun = values['dry-run'] ?? false;
+
+  // A dry run needs no credentials and no opt-in: it renders messages and
+  // sends nothing, which is exactly what you want before wiring up Twilio.
+  if (!dryRun) {
+    if (!config.alerts.configured) {
+      throw new Error(
+        'Twilio is not configured.\n' +
+          'Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER and\n' +
+          'TWILIO_TO_NUMBER in .env. Use --dry-run to preview without credentials.',
+      );
+    }
+    if (!config.alerts.enabled) {
+      throw new Error(
+        'Alerting is disabled. Set ALERTS_ENABLED=true in .env to send real SMS.\n' +
+          'This costs roughly $0.008 per message plus the monthly number fee.',
+      );
+    }
+  }
+
+  const notifier = dryRun
+    ? {
+        channel: 'sms' as const,
+        from: config.alerts.twilio.from ?? 'unconfigured',
+        send: () => {
+          throw new Error('dry run must not send');
+        },
+      }
+    : createTwilioNotifier({
+        accountSid: config.alerts.twilio.accountSid!,
+        authToken: config.alerts.twilio.authToken!,
+        from: config.alerts.twilio.from!,
+      });
+
+  const summary = await sendPendingAlerts(
+    { pool, notifier, logger, to: config.alerts.twilio.to ?? '+10000000000' },
+    {
+      kind: config.alerts.kind,
+      cooldownHours: config.alerts.cooldownHours,
+      dailyBudget: config.alerts.dailyBudget,
+      maxSpikeAgeHours: config.alerts.maxSpikeAgeHours,
+    },
+    { dryRun },
+  );
+
+  console.log('');
+  if (dryRun) console.log('DRY RUN -- no SMS was sent.\n');
+  console.log(`  spikes considered   ${summary.considered}`);
+  console.log(`  would send          ${summary.bodies.length}`);
+  if (!dryRun) {
+    console.log(`  sent                ${summary.sent}`);
+    if (summary.failed > 0) console.log(`  failed              ${summary.failed}`);
+  }
+  const skipped = Object.entries(summary.skipped).filter(([, n]) => n > 0);
+  if (skipped.length > 0) {
+    console.log('  skipped:');
+    for (const [reason, count] of skipped) console.log(`    ${reason.padEnd(14)} ${count}`);
+  }
+  for (const body of summary.bodies) console.log(`\n    "${body}"`);
+  console.log('');
+  return 0;
+}
+
 async function status(pool: Pool): Promise<number> {
   const total = await countPosts(pool);
   const bySource = await countPostsBySource(pool);
@@ -424,7 +533,9 @@ async function main(): Promise<number> {
   if (command === 'list-sources') return listSources(config, sources);
   if (command === 'fetch-once') return await fetchOnce(sources, values);
 
-  const dbCommands = new Set(['ingest-once', 'run', 'status', 'score-once', 'detect-spikes']);
+  const dbCommands = new Set([
+    'ingest-once', 'run', 'status', 'score-once', 'detect-spikes', 'alerts',
+  ]);
   if (!dbCommands.has(command)) {
     console.error(`Unknown command: ${command}\n\n${USAGE}`);
     return 1;
@@ -435,9 +546,10 @@ async function main(): Promise<number> {
   const pool = createPool(config.databaseUrl);
   try {
     if (command === 'ingest-once') return await ingestOnce(pool, sources, logger);
-    if (command === 'run') return await run(pool, sources, logger);
+    if (command === 'run') return await run(config, pool, sources, logger);
     if (command === 'score-once') return await scoreOnce(config, pool, logger, values);
     if (command === 'detect-spikes') return await detectSpikesCommand(pool, logger, values);
+    if (command === 'alerts') return await alertsCommand(config, pool, logger, values);
     return await status(pool);
   } finally {
     await pool.end();

@@ -4,11 +4,11 @@ Detects unusual sentiment spikes for US equities by continuously ingesting
 retail and news chatter, scoring it with an LLM, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M6 complete.** End-to-end: scheduled deduped ingestion, sentiment
-> scoring on Gemini's free tier, rolling-baseline spike detection, a
+> **Status: M7 code complete**, pending a live send against real Twilio
+> credentials. Everything else runs end to end: scheduled deduped ingestion,
+> sentiment scoring on Gemini's free tier, rolling-baseline spike detection, a
 > rate-limited API with three-tier auth, live push over SSE, and a dashboard
-> that updates without a refresh. SMS alerting is next — see the milestone plan
-> below.
+> that updates without a refresh. Public deploy is next — see the plan below.
 
 ---
 
@@ -161,7 +161,7 @@ News front page, and three per-ticker Google News queries.
 | **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | ✅ done |
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | ✅ done |
 | **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | ✅ done |
-| **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | next |
+| **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | ⏳ built; needs Twilio credentials |
 | **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
 | **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
 
@@ -572,9 +572,60 @@ Demo shows a banner saying so and renders the watchlist as an explanation
 instead of controls that would 403. The signup form is genuinely refused by the
 server (403 + the private-demo message) rather than pretending to succeed.
 
+## SMS alerting (M7)
+
+```bash
+npm run worker -- alerts --dry-run   # renders messages, needs no credentials
+npm run worker -- alerts             # SENDS SMS — costs money
+```
+
+**This is the only part of pulse that costs money**, so it is off by default:
+`alerts` refuses to send unless `ALERTS_ENABLED=true` *and* all four Twilio
+variables are set. `--dry-run` needs neither and is the way to check what would
+go out.
+
+### Four independent brakes
+
+This is the one code path that can spend money in a loop, so no single check is
+trusted:
+
+1. **The watchlist is the opt-in.** A spike on a ticker nobody added is
+   recorded, shown on the dashboard, and never texted.
+2. **Kind filter.** Only `volume+sentiment` by default. A volume surge with flat
+   sentiment is usually a scheduled news cycle, and an alert channel that fires
+   on those gets muted within a week — which is worse than no alerts.
+3. **Per-ticker cooldown** (6h), tracked in the database *and* in memory within a
+   run, so two spikes on one ticker in one pass cannot both fire.
+4. **Rolling 24h budget** (10 messages). Even if all three above are wrong,
+   spend is capped.
+
+Plus a spike-age cutoff, so restarting after a week of downtime cannot flood you
+with a backlog of stale alerts.
+
+### Not sending twice is a database constraint, not a check
+
+`alerts` is unique on `(spike_id, channel)`. One spike produces at most one SMS,
+so a restart, a re-run, or a concurrent worker cannot text you twice — the
+guarantee is the constraint, not a prior read that could race.
+
+A **non-retryable** failure (bad number, bad credentials — a 4xx) is *recorded*
+against the spike so it is never attempted again; retrying those spends money to
+fail identically. A **retryable** failure (429, 5xx, network) is deliberately not
+recorded, so it comes back on the next run.
+
+The destination is stored masked (`+1******4821`). The real number lives in
+`.env`; there is no reason for the database, the logs, or a screenshot of either
+to carry it in clear. Messages are kept under 160 characters because Twilio bills
+per segment — there is a test pinning that.
+
+Twilio is called over its REST API directly rather than through the SDK. Sending
+an SMS is one authenticated form POST, and this is the one path where an
+unexpected retry costs money, so it is worth being able to read all of it.
+
 ## Cost
 
-Nothing in pulse calls a paid API. Ingestion is public RSS; scoring is Gemini's
+Ingestion and scoring are free. Twilio is the only paid component, and it stays
+off until you enable it. Ingestion is public RSS; scoring is Gemini's
 free tier.
 
 | Service | Cost | From |
@@ -582,5 +633,5 @@ free tier.
 | RSS sources (Reddit, HN, Google News) | free | M0 |
 | Reddit OAuth, non-commercial | free ≤100 QPM | if approved |
 | Gemini Flash | **$0** — free tier, no card. See the scoring section for how we stay inside the quota | M2 |
-| Twilio | ~$1.15/mo number + ~$0.008/SMS | M7 |
+| **Twilio** | **the only real cost**: ~$1.15/mo number + ~$0.008/SMS | M7 |
 | Hosting (Neon, Render, Vercel free tiers) | free | M8 |
