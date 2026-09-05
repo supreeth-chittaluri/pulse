@@ -75,8 +75,8 @@ async function seedSignals(options: {
 
   for (let i = 0; i < count; i += 1) {
     const { rows } = await pool!.query<{ id: string }>(
-      `insert into posts (source, source_post_id, title, url, scraped_at)
-       values ($1, $2, $3, $4, to_timestamp($5 / 1000.0))
+      `insert into posts (source, source_post_id, title, url, posted_at, scraped_at)
+       values ($1, $2, $3, $4, to_timestamp($5 / 1000.0), to_timestamp($5 / 1000.0))
        returning id`,
       [
         source,
@@ -238,6 +238,34 @@ describe.skipIf(skipReason !== null)('detectSpikes (database)', () => {
     expect(summary.recorded).toBe(0);
     expect(await recentSpikes(pool!)).toHaveLength(0);
     expect(summary.baselinesWritten).toBe(1);
+  });
+
+  // The bug this guards: scoring is on demand and can clear a backlog of
+  // hundreds in one pass. If observations were timestamped by when they were
+  // SCORED, every one of those would land in the same hour and fire a spike on
+  // every ticker involved -- an alert caused entirely by the operator running a
+  // command.
+  it('does not invent a spike when a backlog is scored all at once', async () => {
+    const ticker = 'BACKLOG';
+    // 168 hours of ordinary activity, posted hourly...
+    for (let h = 168; h >= 1; h -= 1) {
+      await seedSignals({
+        ticker,
+        bucket: WINDOW_START - h * HOUR_MS,
+        count: 3,
+        sentiment: 0.1,
+      });
+    }
+    // ...but every signal row stamped as scored at the same instant, which is
+    // exactly what a single `score-once` over a backlog produces.
+    await pool!.query('update signals set scraped_at = $1 where ticker_or_topic = $2', [
+      new Date(WINDOW_START),
+      ticker,
+    ]);
+
+    const summary = await run();
+
+    expect(summary.spikes.map((s) => s.tickerOrTopic)).not.toContain(ticker);
   });
 
   it('handles an empty database', async () => {

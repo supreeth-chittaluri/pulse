@@ -110,19 +110,27 @@ export async function selectTickerSummaries(
 
 export type TrendPoint = { bucket: Date; mentions: number; avgSentiment: number };
 
-/** Hourly series for one ticker, for M6's chart. */
+/**
+ * Hourly series for one ticker.
+ *
+ * Bucketed by when the post was MADE, not when it happened to be scored.
+ * Scoring runs on demand and can clear a backlog of hundreds in one pass; using
+ * the scoring time would collapse a week of activity into a single bar and
+ * invent a spike that never happened.
+ */
 export async function selectTickerTrend(
   pool: Pool,
   ticker: string,
   hours: number,
 ): Promise<TrendPoint[]> {
   const { rows } = await pool.query<{ bucket: Date; mentions: string; avg_sentiment: number }>(
-    `select date_trunc('hour', scraped_at) as bucket,
-            count(*)                       as mentions,
-            avg(sentiment_score)           as avg_sentiment
-       from signals
-      where ticker_or_topic = $1
-        and scraped_at >= now() - make_interval(hours => $2)
+    `select date_trunc('hour', coalesce(p.posted_at, s.scraped_at)) as bucket,
+            count(*)                                                as mentions,
+            avg(s.sentiment_score)                                  as avg_sentiment
+       from signals s
+       join posts p on p.id = s.post_id
+      where s.ticker_or_topic = $1
+        and coalesce(p.posted_at, s.scraped_at) >= now() - make_interval(hours => $2)
       group by 1
       order by 1 asc`,
     [ticker, hours],

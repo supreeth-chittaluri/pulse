@@ -14,6 +14,12 @@ export type SignalObservation = {
  * One query rather than one per ticker: at 91 tickers and a 7-day window this
  * is a few thousand rows, and the alternative is 91 round trips per detection
  * run for no benefit.
+ *
+ * Observations are timestamped by when the post was MADE, not when it was
+ * scored. Scoring runs on demand and can clear a backlog of hundreds in one
+ * pass; using the scoring time would drop all of them into one hour and fire a
+ * spike on every ticker involved -- an alert caused entirely by the operator
+ * running a command.
  */
 export async function selectObservationsSince(
   pool: Pool,
@@ -21,19 +27,23 @@ export async function selectObservationsSince(
 ): Promise<SignalObservation[]> {
   const { rows } = await pool.query<{
     ticker_or_topic: string;
-    scraped_at: Date;
+    observed_at: Date;
     sentiment_score: number;
     source: string;
   }>(
-    `select ticker_or_topic, scraped_at, sentiment_score, source
-       from signals
-      where scraped_at >= $1
-      order by scraped_at asc`,
+    `select s.ticker_or_topic,
+            coalesce(p.posted_at, s.scraped_at) as observed_at,
+            s.sentiment_score,
+            s.source
+       from signals s
+       join posts p on p.id = s.post_id
+      where coalesce(p.posted_at, s.scraped_at) >= $1
+      order by 2 asc`,
     [since],
   );
   return rows.map((row) => ({
     tickerOrTopic: row.ticker_or_topic,
-    at: row.scraped_at,
+    at: row.observed_at,
     sentiment: row.sentiment_score,
     source: row.source,
   }));
