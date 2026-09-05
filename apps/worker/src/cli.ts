@@ -32,6 +32,7 @@ import {
 } from '@pulse/scoring';
 import { HOUR_MS, latestCompleteWindow } from '@pulse/analysis';
 import { createTwilioNotifier, sendPendingAlerts } from '@pulse/alerting';
+import { runBackgroundLoops, REDDIT_MIN_INTERVAL_MS } from './loops.ts';
 import { detectSpikes } from './spikes.ts';
 import { ingestSource } from './ingest.ts';
 import { runScheduler } from './scheduler.ts';
@@ -61,13 +62,6 @@ Options:
   --json          fetch-once: print raw JSON
   --help          Show this message
 `.trim();
-
-/**
- * Reddit's .rss limiter is per client across ALL feeds at roughly one request
- * per minute. Every Reddit adapter shares the "reddit" bucket and queues behind
- * this interval; see MinIntervalGate.
- */
-const REDDIT_MIN_INTERVAL_MS = 60_000;
 
 function truncate(value: string, max: number): string {
   const flat = value.replace(/\s+/g, ' ').trim();
@@ -180,74 +174,12 @@ async function ingestOnce(pool: Pool, sources: Source[], logger: Logger): Promis
   return failed === sources.length ? 1 : 0;
 }
 
-/**
- * Spike detection alongside ingestion.
- *
- * Detection touches no external service and costs nothing, so it runs on a
- * timer rather than on demand -- the opposite of scoring. Buckets are hourly,
- * so five minutes is ample: it only ever re-tests the last complete hour, and
- * the unique constraint on (ticker, window_start) makes repeats free.
- */
-async function detectionLoop(
-  config: Config,
-  pool: Pool,
-  logger: Logger,
-  signal: AbortSignal,
-  intervalMs = 5 * 60 * 1000,
-): Promise<void> {
-  while (!signal.aborted) {
-    try {
-      const summary = await detectSpikes({ pool, logger });
-      if (summary.recorded > 0) {
-        logger.info('spikes recorded', {
-          recorded: summary.recorded,
-          tickers: summary.tickersConsidered,
-        });
-        // Alerting is opt-in because it spends money on every message. Detection
-        // itself always runs; only the texting is gated.
-        if (config.alerts.enabled && config.alerts.configured) {
-          const alerts = await sendPendingAlerts(
-            {
-              pool,
-              notifier: createTwilioNotifier({
-                accountSid: config.alerts.twilio.accountSid!,
-                authToken: config.alerts.twilio.authToken!,
-                from: config.alerts.twilio.from!,
-              }),
-              logger,
-              to: config.alerts.twilio.to!,
-            },
-            {
-              kind: config.alerts.kind,
-              cooldownHours: config.alerts.cooldownHours,
-              dailyBudget: config.alerts.dailyBudget,
-              maxSpikeAgeHours: config.alerts.maxSpikeAgeHours,
-            },
-          );
-          if (alerts.sent > 0) logger.info('alerts sent', { sent: alerts.sent });
-        }
-      }
-    } catch (err) {
-      // Detection failing must never take ingestion down with it.
-      logger.error('spike detection failed', { error: (err as Error).message });
-    }
-
-    let remaining = intervalMs;
-    while (remaining > 0 && !signal.aborted) {
-      const chunk = Math.min(remaining, 500);
-      await systemClock.sleep(chunk, signal);
-      remaining -= chunk;
-    }
-  }
-}
-
 async function run(
   config: Config,
   pool: Pool,
   sources: Source[],
   logger: Logger,
 ): Promise<number> {
-  const gate = new MinIntervalGate(REDDIT_MIN_INTERVAL_MS);
   const controller = new AbortController();
 
   let stopping = false;
@@ -263,17 +195,9 @@ async function run(
     });
   }
 
-  await Promise.all([
-    runScheduler({
-      sources,
-      logger,
-      signal: controller.signal,
-      runImmediately: true,
-      run: (source, signal) => ingestSource({ pool, gate, logger }, source, signal),
-    }),
-    detectionLoop(config, pool, logger, controller.signal),
-  ]);
-
+  // The loops live in loops.ts so the API can run the same ones in-process;
+  // see DEPLOY.md for why a $0 deployment needs that.
+  await runBackgroundLoops({ config, pool, logger, signal: controller.signal, sources });
   return 0;
 }
 

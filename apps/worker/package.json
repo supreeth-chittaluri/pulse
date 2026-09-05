@@ -9,5 +9,8 @@
     "@pulse/scoring": "*",
     "@pulse/analysis": "*",
     "@pulse/alerting": "*"
+  },
+  "exports": {
+    "./loops": "./src/loops.ts"
   }
 }

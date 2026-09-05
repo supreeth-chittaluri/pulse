@@ -1,0 +1,31 @@
+# Render's free tier spins a web service down after ~15 minutes without
+# traffic, and a spun-down service ingests nothing. This pings /health often
+# enough to keep it awake, which is also what makes the public demo link load
+# immediately instead of after a ~50 second cold start.
+#
+# GitHub's scheduled workflows are best-effort and can run late under load; that
+# is fine here, since a late ping only means a slower first page load.
+name: keepalive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        env:
+          PULSE_URL: ${{ vars.PULSE_URL }}
+        run: |
+          if [ -z "$PULSE_URL" ]; then
+            echo "PULSE_URL repository variable is not set; nothing to ping."
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$PULSE_URL/health")
+          echo "GET $PULSE_URL/health -> $code"
+          # A cold start can exceed the timeout; only a definite failure fails
+          # the job, so a slow wake-up does not spam the notifications.
+          [ "$code" = "200" ] || [ "$code" = "000" ]

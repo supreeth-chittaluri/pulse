@@ -47,6 +47,13 @@ const envSchema = z.object({
   ALERT_COOLDOWN_HOURS: z.coerce.number().int().min(0).default(6),
   ALERT_DAILY_BUDGET: z.coerce.number().int().min(0).default(10),
   ALERT_MAX_SPIKE_AGE_HOURS: z.coerce.number().int().min(1).default(6),
+
+  // M8. Free hosting tiers generally bill background workers but not web
+  // services, so a $0 deployment runs ingestion inside the API process.
+  RUN_WORKER_IN_API: z
+    .string()
+    .default('false')
+    .transform((value) => value === 'true'),
 });
 
 export type Config = {
@@ -74,6 +81,7 @@ export type Config = {
     dailyBudget: number;
     maxSpikeAgeHours: number;
   };
+  runWorkerInApi: boolean;
   http: {
     corsOrigins: string[];
     rateLimitPerMinute: number;
@@ -168,6 +176,7 @@ export function loadConfig(): Config {
       dailyBudget: env.ALERT_DAILY_BUDGET,
       maxSpikeAgeHours: env.ALERT_MAX_SPIKE_AGE_HOURS,
     },
+    runWorkerInApi: env.RUN_WORKER_IN_API,
     http: {
       corsOrigins: env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
       rateLimitPerMinute: env.RATE_LIMIT_PER_MINUTE,

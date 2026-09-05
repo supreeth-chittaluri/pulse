@@ -8,6 +8,7 @@
     "@pulse/sources": "*",
     "express": "^5.1.0",
     "jose": "^6.2.11",
-    "@pulse/scoring": "*"
+    "@pulse/scoring": "*",
+    "@pulse/worker": "*"
   }
 }

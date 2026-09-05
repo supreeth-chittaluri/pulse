@@ -2,6 +2,7 @@ import { createLogger, createPool, loadConfig } from '@pulse/core';
 import { createApp } from './app.ts';
 import { StreamHub } from './stream/hub.ts';
 import { createChangeListener, type ChangeListener } from './stream/listener.ts';
+import { runBackgroundLoops } from '@pulse/worker/loops';
 
 const logger = createLogger('api');
 const config = loadConfig();
@@ -23,12 +24,31 @@ const server = app.listen(config.port, () => {
     port: config.port,
     env: config.nodeEnv,
     streamSource: listener.kind,
+    workerInProcess: config.runWorkerInApi,
   });
 });
+
+/**
+ * Ingestion and detection inside the web process.
+ *
+ * Free hosting tiers generally bill background workers but not web services, so
+ * a $0 deployment has to run both here. Locally the standalone worker is still
+ * the better choice -- it restarts independently of the API.
+ */
+const background = new AbortController();
+if (config.runWorkerInApi) {
+  void runBackgroundLoops({ config, pool, logger, signal: background.signal }).catch(
+    (err: unknown) => {
+      // The dashboard must stay up even if ingestion dies.
+      logger.error('background loops stopped', { error: (err as Error).message });
+    },
+  );
+}
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     logger.info('shutting down', { signal });
+    background.abort();
     hub.close();
     void listener.stop().finally(() => {
       server.close(() => {

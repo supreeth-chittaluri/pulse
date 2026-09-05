@@ -162,7 +162,7 @@ News front page, and three per-ticker Google News queries.
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | ✅ done |
 | **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | ✅ done |
 | **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | ◑ verified to the provider boundary — see note |
-| **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
+| **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | ◑ audit + deploy config done; deploy needs your accounts |
 | **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
 
 ## How ingestion runs
@@ -634,6 +634,34 @@ per segment — there is a test pinning that.
 Twilio is called over its REST API directly rather than through the SDK. Sending
 an SMS is one authenticated form POST, and this is the one path where an
 unexpected retry costs money, so it is worth being able to read all of it.
+
+## Abuse audit (M8)
+
+No public or demo-role endpoint may trigger Gemini, Twilio, or an on-demand
+scrape. On a metered API that would be a bill; on a fixed free quota and a
+per-message SMS cost it is worse — a stranger can exhaust the day's scoring
+quota, or run up a phone bill, from a browser.
+
+That is enforced by a test rather than a checklist, because checklists get read
+once and then rot:
+
+```bash
+npx vitest run apps/api/src/abuse-audit.test.ts
+```
+
+| Layer | What it proves |
+|---|---|
+| **Coverage** | Every route the router exposes is classified. Adding one without classifying it fails the audit. |
+| **Behaviour** | With `fetch` stubbed, every anonymous and demo route makes **zero outbound requests**. Gemini, Twilio and every source go over `fetch`, so one assertion covers all three hazards — and it runs against a *fully configured* instance, so it proves the guards hold rather than that an unconfigured box cannot spend. |
+| **Structure** | The module graph from the anonymous route files never reaches `@pulse/scoring` or `@pulse/alerting`. A future edit wiring one in fails immediately, not at the first invoice. |
+
+The scoring trigger is admin-only (401 anonymous, 403 demo) and capped at 60
+posts per call, so even a stolen admin token cannot drain a day's quota in one
+request.
+
+Deployment is documented in **[DEPLOY.md](DEPLOY.md)**: Neon + a single Render
+web service running the API, the dashboard, and ingestion in one process,
+because free tiers bill background workers but not web services.
 
 ## Cost
 

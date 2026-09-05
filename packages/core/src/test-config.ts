@@ -18,6 +18,7 @@ export function makeTestConfig(overrides: Partial<Config> = {}): Config {
       dailyRequestBudget: 400,
     },
     scoring: { batchSize: 15 },
+    runWorkerInApi: false,
     alerts: {
       enabled: false,
       configured: false,

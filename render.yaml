@@ -1,0 +1,51 @@
+# Render blueprint for a $0 deployment.
+#
+# One web service, because Render's free tier covers web services but not
+# background workers -- so ingestion and spike detection run inside the API
+# process (RUN_WORKER_IN_API). See DEPLOY.md for the tradeoffs, especially the
+# free-tier spin-down.
+services:
+  - type: web
+    name: pulse
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm run build:web && npm run db:migrate
+    startCommand: npm run start:api
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render terminates TLS at a proxy; without this every request appears to
+      # come from that proxy and one client's traffic rate-limits everyone.
+      - key: TRUST_PROXY
+        value: "1"
+      - key: RUN_WORKER_IN_API
+        value: "true"
+      # Same origin serves the dashboard, so no CORS allowlist is needed.
+      - key: CORS_ORIGINS
+        value: ""
+      - key: USER_AGENT
+        value: "pulse/0.1 (portfolio project; contact: you@example.com)"
+
+      # Generated once by Render and kept. A predictable signing key is a
+      # complete auth bypass, and the app refuses to boot without one in
+      # production.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # --- set these in the Render dashboard, never in this file -------------
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_USER_EMAIL
+        sync: false
+      - key: ADMIN_USER_PASSWORD
+        sync: false
+      - key: DEMO_USER_PASSWORD
+        sync: false
+
+      # Alerting stays off. Turning it on is the only thing here that costs money.
+      - key: ALERTS_ENABLED
+        value: "false"
