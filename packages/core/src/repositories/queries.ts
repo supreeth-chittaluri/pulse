@@ -211,3 +211,57 @@ export async function deleteWatchlistEntry(pool: Pool, tickerOrTopic: string): P
   ]);
   return (rowCount ?? 0) > 0;
 }
+
+/** Signals newer than a cursor, oldest first. Drives the live stream. */
+export async function selectSignalsAfterId(
+  pool: Pool,
+  afterId: number,
+  limit: number,
+): Promise<SignalRow[]> {
+  const { rows } = await pool.query<{
+    id: string;
+    post_id: string;
+    source: string;
+    ticker_or_topic: string;
+    sentiment_score: number;
+    confidence: number | null;
+    raw_excerpt: string;
+    scraped_at: Date;
+    title: string;
+    url: string;
+  }>(
+    `select s.id, s.post_id, s.source, s.ticker_or_topic, s.sentiment_score,
+            s.confidence, s.raw_excerpt, s.scraped_at, p.title, p.url
+       from signals s
+       join posts p on p.id = s.post_id
+      where s.id > $1
+      order by s.id asc
+      limit $2`,
+    [afterId, limit],
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    postId: Number(row.post_id),
+    source: row.source,
+    tickerOrTopic: row.ticker_or_topic,
+    sentimentScore: row.sentiment_score,
+    confidence: row.confidence,
+    rawExcerpt: row.raw_excerpt,
+    scrapedAt: row.scraped_at,
+    title: row.title,
+    url: row.url,
+  }));
+}
+
+export type MaxIds = { signalId: number; spikeId: number };
+
+export async function selectMaxIds(pool: Pool): Promise<MaxIds> {
+  const { rows } = await pool.query<{ signal_id: string | null; spike_id: string | null }>(
+    `select (select max(id) from signals) as signal_id,
+            (select max(id) from spikes)  as spike_id`,
+  );
+  return {
+    signalId: Number(rows[0]?.signal_id ?? 0),
+    spikeId: Number(rows[0]?.spike_id ?? 0),
+  };
+}

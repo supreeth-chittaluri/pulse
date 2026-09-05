@@ -35,6 +35,7 @@ export {
   lastSpikePerTicker,
   watchlistThresholds,
   recentSpikes,
+  selectSpikesAfterId,
   type SignalObservation,
   type BaselineRow,
   type SpikeRow,
@@ -63,4 +64,7 @@ export {
   type TrendPoint,
   type Stats,
   type WatchlistEntry,
+  selectSignalsAfterId,
+  selectMaxIds,
+  type MaxIds,
 } from './repositories/queries.ts';

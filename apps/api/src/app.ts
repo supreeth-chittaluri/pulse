@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import type { Config, Logger, Pool } from '@pulse/core';
 import { buildSources } from '@pulse/sources';
@@ -7,12 +8,23 @@ import { responseCache, type ResponseCache } from './middleware/cache.ts';
 import { publicRoutes } from './routes/public.ts';
 import { authRoutes } from './routes/auth.ts';
 import { adminRoutes } from './routes/admin.ts';
+import { streamRoutes, type StreamOptions } from './routes/stream.ts';
+import { StreamHub } from './stream/hub.ts';
 
-export type AppDeps = { config: Config; pool: Pool; logger: Logger };
+export type AppDeps = {
+  config: Config;
+  pool: Pool;
+  logger: Logger;
+  /** Started by the caller; created unstarted here when omitted. */
+  hub?: StreamHub;
+  /** Overrides for the SSE endpoint. Tests shorten the heartbeat. */
+  streamOptions?: Partial<Omit<StreamOptions, 'hub' | 'logger'>>;
+};
 
 export type PulseApp = Express & {
   /** Exposed so tests can clear limiter and cache state between cases. */
   resetState(): void;
+  streamHub: StreamHub;
 };
 
 /**
@@ -24,7 +36,7 @@ export type PulseApp = Express & {
  *              no extra data access; it exists for the M6 narrative.
  *   admin      writes, and anything that spends a finite resource.
  */
-export function createApp({ config, pool, logger }: AppDeps): PulseApp {
+export function createApp({ config, pool, logger, hub, streamOptions }: AppDeps): PulseApp {
   const app = express() as PulseApp;
   app.disable('x-powered-by');
 
@@ -88,6 +100,19 @@ export function createApp({ config, pool, logger }: AppDeps): PulseApp {
   app.post('/api/auth/login', loginLimiter);
   app.use('/api/auth', publicLimiter, authRoutes(pool, config, logger));
 
+  // Mounted before the /api limiter and cache: an SSE connection is one
+  // request that lives for hours, so a per-request rate limit is meaningless
+  // here and caching a stream would be actively wrong. It enforces a
+  // concurrency cap of its own instead.
+  const streamHub = hub ?? new StreamHub({ pool, logger });
+  app.use('/api/stream', streamRoutes({ hub: streamHub, logger, ...streamOptions }));
+
+  // Throwaway demo page proving M5's acceptance ("open two tabs"), superseded
+  // by M6's dashboard.
+  app.get('/stream', (_req, res) => {
+    res.sendFile(fileURLToPath(new URL('../public/stream.html', import.meta.url)));
+  });
+
   app.use('/api', publicLimiter, cache, publicRoutes(pool));
 
   // requireRole sits on the mount, so it cannot be forgotten on an individual
@@ -112,6 +137,7 @@ export function createApp({ config, pool, logger }: AppDeps): PulseApp {
     res.status(500).json({ error: 'internal_error' });
   });
 
+  app.streamHub = streamHub;
   app.resetState = () => {
     publicLimiter.reset();
     adminLimiter.reset();

@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>pulse live stream</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1.5rem; }
+  h1 { font-size: 1rem; margin: 0 0 .25rem; }
+  .sub { opacity: .65; margin-bottom: 1rem; }
+  #state { display: inline-block; padding: .15rem .5rem; border-radius: 3px; font-size: .8rem; }
+  .live { background: #1a7f37; color: #fff; }
+  .down { background: #b42318; color: #fff; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: .5rem .6rem; border-left: 3px solid #999; margin-bottom: .35rem;
+       background: color-mix(in srgb, currentColor 5%, transparent); animation: in .4s ease; }
+  li.spike { border-left-color: #b42318; }
+  li.signal { border-left-color: #1a7f37; }
+  .tk { font-weight: 700; }
+  .meta { opacity: .6; font-size: .8rem; }
+  @keyframes in { from { opacity: 0; transform: translateY(-4px); } }
+</style>
+
+<h1>pulse — live stream</h1>
+<div class="sub">
+  <span id="state" class="down">connecting</span>
+  <span id="count">0 events</span> · cursor <span id="cursor">—</span>
+</div>
+<p class="sub">Open this page in two tabs, then run
+  <code>npm run worker -- score-once --limit 15</code>. Both should update with no refresh.</p>
+<ul id="feed"></ul>
+
+<script>
+  const feed = document.getElementById('feed');
+  const state = document.getElementById('state');
+  const countEl = document.getElementById('count');
+  const cursorEl = document.getElementById('cursor');
+  let count = 0;
+
+  // EventSource reconnects on its own and replays Last-Event-ID, so there is
+  // deliberately no retry logic here.
+  const source = new EventSource('/api/stream');
+
+  source.addEventListener('open', () => {
+    state.textContent = 'live';
+    state.className = 'live';
+  });
+  source.addEventListener('error', () => {
+    state.textContent = 'reconnecting';
+    state.className = 'down';
+  });
+  source.addEventListener('ready', (e) => {
+    cursorEl.textContent = JSON.parse(e.data).cursor;
+  });
+
+  function add(kind, html, id) {
+    const li = document.createElement('li');
+    li.className = kind;
+    li.innerHTML = html;
+    feed.prepend(li);
+    while (feed.children.length > 100) feed.lastChild.remove();
+    countEl.textContent = `${++count} events`;
+    if (id) cursorEl.textContent = id;
+  }
+
+  source.addEventListener('signal', (e) => {
+    const s = JSON.parse(e.data);
+    const score = Number(s.sentimentScore).toFixed(2);
+    add('signal',
+      `<span class="tk">${s.tickerOrTopic}</span> ${score}
+       <div class="meta">${s.source} · ${new Date(s.scrapedAt).toLocaleTimeString()}</div>
+       <div class="meta">${(s.title || '').slice(0, 110)}</div>`, e.lastEventId);
+  });
+
+  source.addEventListener('spike', (e) => {
+    const s = JSON.parse(e.data);
+    add('spike',
+      `<span class="tk">SPIKE ${s.tickerOrTopic}</span> ${s.mentionCount} mentions,
+       volume z ${Number(s.volumeZ).toFixed(2)} (${s.kind})
+       <div class="meta">${new Date(s.detectedAt).toLocaleTimeString()}</div>`, e.lastEventId);
+  });
+</script>

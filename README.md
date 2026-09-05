@@ -4,10 +4,10 @@ Detects unusual sentiment spikes for US equities by continuously ingesting
 retail and news chatter, scoring it with an LLM, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M4 complete.** Scheduled deduped ingestion, on-demand sentiment
-> scoring on Gemini's free tier, rolling-baseline spike detection, and a
-> rate-limited API with a three-tier auth model. Real-time push is next — see
-> the milestone plan below.
+> **Status: M5 complete.** Scheduled deduped ingestion, on-demand sentiment
+> scoring on Gemini's free tier, rolling-baseline spike detection, a
+> rate-limited API with a three-tier auth model, and live push over SSE. The
+> dashboard is next — see the milestone plan below.
 
 ---
 
@@ -157,8 +157,8 @@ News front page, and three per-ticker Google News queries.
 | **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | ✅ live; eval awaiting labels |
 | **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | ✅ done |
 | **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | ✅ done |
-| **M5** | Real-time push | A new signal appears live in two open browser tabs | next |
-| **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | |
+| **M5** | Real-time push | A new signal appears live in two open browser tabs | ✅ done |
+| **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | next |
 | **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | |
 | **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
 | **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
@@ -455,6 +455,68 @@ without it** — a predictable signing key is a complete auth bypass. Developmen
 falls back to a random per-process key, so tokens stop working across restarts
 rather than a checked-in default silently reaching production. The admin
 password has no default at all; seeding refuses to create an admin without one.
+
+## Live push (M5)
+
+```bash
+npm run dev:api        # then open http://localhost:3000/stream in two tabs
+npm run worker -- score-once --limit 15
+```
+
+Both tabs update with no refresh. That throwaway page is superseded by M6's
+dashboard; it exists so the acceptance criterion is demonstrable now.
+
+### SSE, not WebSocket
+
+The traffic is one-directional, so SSE wins on everything that matters here: it
+is plain HTTP (no upgrade for proxies and free-tier hosts to mishandle),
+`EventSource` reconnects on its own, and it needs no dependency.
+
+### Bridging two processes
+
+The **worker** writes signals; the **API** holds the connections. A trigger on
+`signals`/`spikes` INSERT calls `pg_notify`, so *every* writer publishes — the
+worker, `POST /api/admin/score`, M7's alerting, even a manual SQL insert. An
+application-level publish is a thing someone forgets exactly once, after which
+the stream is quietly incomplete.
+
+The notification payload is only a row id, and even that is just a wake-up: the
+hub keeps its own cursor and re-queries from it, so a notification dropped while
+nothing was listening is harmless rather than a permanently missed row.
+
+`LISTEN/NOTIFY` needs a dedicated non-pooled connection, and **Neon's pooled
+connection string does not support it** — which is exactly the URL a free-tier
+deploy is handed. So the listener falls back to polling automatically, both at
+startup and if the notify connection dies later. Two seconds of latency beats a
+stream that silently never fires. `/health` and the API startup log report which
+source is live.
+
+### Correctness details
+
+- **Resume is exact.** Signals and spikes have independent id sequences, so the
+  SSE event id is the pair `signalId-spikeId`. `EventSource` returns it as
+  `Last-Event-ID` on reconnect and the server replays precisely what was missed
+  — no gap, no duplicate.
+- **Bursts coalesce.** Scoring writes ~15 signals at once; a 100ms debounce
+  turns that into one query and one flush.
+- **Concurrency is bounded** (100 total, 3 per client). A public endpoint
+  holding sockets open is a memory exhaustion vector, and the request rate
+  limiter cannot help — one SSE connection is a single request that lives for
+  hours. The stream route is mounted before the limiter and cache for the same
+  reason; caching a stream would be actively wrong.
+- **Heartbeat every 25s**, because proxies commonly kill idle connections at
+  30–60s, plus `X-Accel-Buffering: no` so nginx-style buffering does not hold
+  events until a buffer fills.
+
+### A note on testing this
+
+Connection accounting lives in `ConnectionRegistry` and is tested directly.
+Asserting it over live sockets was unreliable: whether a disconnect is observed
+depends on the HTTP client and its pooling, and when client and server share one
+process under the test runner, socket closes are not delivered dependably —
+`fetch` also tears down a response whose body is never read. The behaviour was
+verified correct against a real out-of-process client; the unit tests pin the
+logic without that ambiguity.
 
 ## Cost
 

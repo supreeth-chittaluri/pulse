@@ -167,3 +167,40 @@ export async function recentSpikes(pool: Pool, limit = 20): Promise<RecentSpike[
     kind: row.kind,
   }));
 }
+
+/** Spikes newer than a cursor, oldest first. Drives the live stream. */
+export async function selectSpikesAfterId(
+  pool: Pool,
+  afterId: number,
+  limit: number,
+): Promise<Array<RecentSpike & { id: number }>> {
+  const { rows } = await pool.query<{
+    id: string;
+    ticker_or_topic: string;
+    detected_at: Date;
+    window_start: Date;
+    window_end: Date;
+    mention_count: number;
+    volume_z: number;
+    sentiment_z: number | null;
+    current_sentiment: number | null;
+    baseline_avg_volume: number;
+    baseline_avg_sentiment: number | null;
+    kind: 'volume' | 'volume+sentiment';
+  }>('select * from spikes where id > $1 order by id asc limit $2', [afterId, limit]);
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    tickerOrTopic: row.ticker_or_topic,
+    detectedAt: row.detected_at,
+    windowStart: row.window_start,
+    windowEnd: row.window_end,
+    mentionCount: row.mention_count,
+    volumeZ: row.volume_z,
+    sentimentZ: row.sentiment_z,
+    currentSentiment: row.current_sentiment,
+    baselineAvgVolume: row.baseline_avg_volume,
+    baselineAvgSentiment: row.baseline_avg_sentiment,
+    kind: row.kind,
+  }));
+}
