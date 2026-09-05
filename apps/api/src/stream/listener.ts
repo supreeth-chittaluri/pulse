@@ -16,6 +16,51 @@ export interface ChangeListener {
 
 export const CHANNELS = ['pulse_signal', 'pulse_spike'] as const;
 
+/** Channel used only by the startup self-test below. */
+const PROBE_CHANNEL = 'pulse_probe';
+
+/** The subset of a pg.Client the delivery probe needs, so tests can fake it. */
+export type ProbeConnection = {
+  on(event: 'notification', listener: (message: { channel: string; payload?: string }) => void): unknown;
+  removeListener(
+    event: 'notification',
+    listener: (message: { channel: string; payload?: string }) => void,
+  ): unknown;
+  query(text: string, values?: unknown[]): Promise<unknown>;
+};
+
+/**
+ * Proves notifications actually round-trip on this connection.
+ *
+ * A pooler in transaction mode (pgBouncer, which is what Neon's pooled endpoint
+ * is) accepts LISTEN without error and then never delivers anything: the NOTIFY
+ * lands on a different backend. Trusting a successful LISTEN would report a
+ * healthy stream that silently never fires -- the worst kind of failure,
+ * because nothing looks wrong from outside.
+ */
+export async function probeNotifyDelivery(
+  connection: ProbeConnection,
+  timeoutMs: number,
+): Promise<boolean> {
+  const token = `probe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  return new Promise<boolean>((resolvePromise) => {
+    const settle = (value: boolean): void => {
+      clearTimeout(timer);
+      connection.removeListener('notification', onProbe);
+      resolvePromise(value);
+    };
+
+    function onProbe(message: { channel: string; payload?: string }): void {
+      if (message.channel === PROBE_CHANNEL && message.payload === token) settle(true);
+    }
+
+    const timer = setTimeout(() => settle(false), timeoutMs);
+    connection.on('notification', onProbe);
+    void connection.query('select pg_notify($1, $2)', [PROBE_CHANNEL, token]).catch(() => settle(false));
+  });
+}
+
 /**
  * Postgres LISTEN/NOTIFY. Sub-second latency and no polling load.
  *
@@ -27,6 +72,7 @@ export function createNotifyListener(
   databaseUrl: string,
   logger: Logger,
   onDrop?: () => void,
+  probeTimeoutMs = 3000,
 ): ChangeListener {
   let client: pg.Client | undefined;
   let stopped = false;
@@ -53,9 +99,22 @@ export function createNotifyListener(
       });
 
       await connection.connect();
-      for (const channel of CHANNELS) {
+      for (const channel of [...CHANNELS, PROBE_CHANNEL]) {
         await connection.query(`listen ${channel}`);
       }
+
+      const delivered = await probeNotifyDelivery(connection, probeTimeoutMs);
+
+      if (!delivered) {
+        await connection.end().catch(() => {});
+        throw new Error(
+          'LISTEN succeeded but no notification was delivered within ' +
+            `${probeTimeoutMs}ms. This is what a pooled connection (pgBouncer, ` +
+            "e.g. Neon's -pooler endpoint) looks like. Use the direct connection " +
+            'string for live push.',
+        );
+      }
+
       client = connection;
       logger.info('stream listening via LISTEN/NOTIFY', { channels: [...CHANNELS] });
     },
@@ -107,8 +166,17 @@ export async function createChangeListener(options: {
   onChange: () => void;
   /** Test seam: forces the fallback path. */
   disableNotify?: boolean;
+  /** How long the delivery self-test waits before declaring notify unusable. */
+  probeTimeoutMs?: number;
 }): Promise<ChangeListener> {
-  const { databaseUrl, logger, pollIntervalMs = 2000, onChange, disableNotify } = options;
+  const {
+    databaseUrl,
+    logger,
+    pollIntervalMs = 2000,
+    onChange,
+    disableNotify,
+    probeTimeoutMs,
+  } = options;
 
   let active: ChangeListener | undefined;
   let fellBack = false;
@@ -124,9 +192,12 @@ export async function createChangeListener(options: {
 
   if (!disableNotify) {
     try {
-      const notify = createNotifyListener(databaseUrl, logger, () => {
-        void fallBack('notify connection lost');
-      });
+      const notify = createNotifyListener(
+        databaseUrl,
+        logger,
+        () => void fallBack('notify connection lost'),
+        probeTimeoutMs,
+      );
       await notify.start(onChange);
       active = notify;
     } catch (err) {

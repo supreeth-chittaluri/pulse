@@ -7,7 +7,7 @@ import { createPool, insertPosts, makeTestConfig, type Logger, type Pool } from 
 import { runMigrations } from '../../../../db/migrate.ts';
 import { createApp, type PulseApp } from '../app.ts';
 import { StreamHub, formatCursor, parseCursor } from './hub.ts';
-import { createChangeListener } from './listener.ts';
+import { createChangeListener, probeNotifyDelivery, type ProbeConnection } from './listener.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 try {
@@ -459,6 +459,79 @@ describe.skipIf(skipReason !== null)('SSE endpoint', () => {
       held.close();
       scopedServer.close();
     }
+  });
+});
+
+/**
+ * The delivery probe, tested against fake connections rather than a real
+ * socket. Racing a live database against a short timeout is not a test, it is a
+ * coin flip -- and the behaviour worth pinning here is the decision, not the
+ * timing.
+ */
+describe('probeNotifyDelivery', () => {
+  type Listener = (message: { channel: string; payload?: string }) => void;
+
+  /** A connection that echoes its own pg_notify back, like real Postgres. */
+  function deliveringConnection(): ProbeConnection {
+    const listeners = new Set<Listener>();
+    return {
+      on: (_event, listener) => listeners.add(listener),
+      removeListener: (_event, listener) => listeners.delete(listener),
+      query: async (_text, values) => {
+        const [channel, payload] = values as [string, string];
+        queueMicrotask(() => {
+          for (const listener of listeners) listener({ channel, payload });
+        });
+        return undefined;
+      },
+    };
+  }
+
+  /**
+   * A connection that accepts the NOTIFY and never delivers it. This is exactly
+   * what a transaction-mode pooler does, and it is why the probe exists.
+   */
+  function silentConnection(): ProbeConnection {
+    return {
+      on: () => undefined,
+      removeListener: () => undefined,
+      query: async () => undefined,
+    };
+  }
+
+  it('passes when the notification comes back', async () => {
+    expect(await probeNotifyDelivery(deliveringConnection(), 1000)).toBe(true);
+  });
+
+  it('fails when LISTEN is accepted but nothing is delivered', async () => {
+    expect(await probeNotifyDelivery(silentConnection(), 50)).toBe(false);
+  });
+
+  it('fails when the NOTIFY statement itself is rejected', async () => {
+    const rejecting: ProbeConnection = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      query: async () => {
+        throw new Error('permission denied for function pg_notify');
+      },
+    };
+    expect(await probeNotifyDelivery(rejecting, 1000)).toBe(false);
+  });
+
+  it('ignores a notification that is not its own probe', async () => {
+    const listeners = new Set<Listener>();
+    const noisy: ProbeConnection = {
+      on: (_event, listener) => listeners.add(listener),
+      removeListener: (_event, listener) => listeners.delete(listener),
+      query: async () => {
+        // Unrelated traffic on another channel must not be mistaken for proof.
+        queueMicrotask(() => {
+          for (const listener of listeners) listener({ channel: 'pulse_signal', payload: '42' });
+        });
+        return undefined;
+      },
+    };
+    expect(await probeNotifyDelivery(noisy, 50)).toBe(false);
   });
 });
 
