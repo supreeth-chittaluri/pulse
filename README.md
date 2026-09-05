@@ -4,8 +4,8 @@ Detects unusual sentiment spikes for US equities by continuously ingesting
 retail and news chatter, scoring it with an LLM, and comparing each ticker
 against its own rolling baseline.
 
-> **Status: M7 code complete**, pending a live send against real Twilio
-> credentials. Everything else runs end to end: scheduled deduped ingestion,
+> **Status: M7 complete to the provider boundary.** Everything else runs end to
+> end: scheduled deduped ingestion,
 > sentiment scoring on Gemini's free tier, rolling-baseline spike detection, a
 > rate-limited API with three-tier auth, live push over SSE, and a dashboard
 > that updates without a refresh. Public deploy is next — see the plan below.
@@ -161,7 +161,7 @@ News front page, and three per-ticker Google News queries.
 | **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | ✅ done |
 | **M5** | Real-time push | A new signal appears live in two open browser tabs | ✅ done |
 | **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | ✅ done |
-| **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | ⏳ built; needs Twilio credentials |
+| **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | ◑ verified to the provider boundary — see note |
 | **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | |
 | **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
 
@@ -583,6 +583,19 @@ npm run worker -- alerts             # SENDS SMS — costs money
 `alerts` refuses to send unless `ALERTS_ENABLED=true` *and* all four Twilio
 variables are set. `--dry-run` needs neither and is the way to check what would
 go out.
+
+### Verified to the provider boundary
+
+The live send is **deliberately not part of this project's acceptance**: a
+Twilio number is a recurring monthly cost, and this is a portfolio demo that
+otherwise runs at $0. Everything up to the HTTP call to Twilio is tested against
+a fake notifier — message composition and the 160-character segment cap, the
+retry policy, masked storage, the duplicate-send constraint, and all four spend
+brakes below. What is unexercised is one authenticated form POST and Twilio's
+own response parsing.
+
+Enabling it is a `.env` change and nothing else: fill in the four `TWILIO_*`
+variables, set `ALERTS_ENABLED=true`, and run `npm run worker -- alerts`.
 
 ### Four independent brakes
 
