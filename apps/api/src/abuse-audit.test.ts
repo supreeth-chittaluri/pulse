@@ -79,6 +79,9 @@ const ROUTES: Array<{ method: string; path: string; tier: Tier; body?: unknown }
   { method: 'GET', path: '/api/tickers', tier: 'anonymous' },
   { method: 'GET', path: '/api/tickers/NVDA', tier: 'anonymous' },
   { method: 'GET', path: '/api/stream/status', tier: 'anonymous' },
+  // Bounded (~3s) and touches no database, but it is public, so the audit
+  // still has to prove it cannot reach a paid provider.
+  { method: 'GET', path: '/api/stream/selftest', tier: 'anonymous' },
 
   { method: 'POST', path: '/api/auth/login', tier: 'anonymous', body: { email: 'a@b.co', password: 'x' } },
   { method: 'GET', path: '/api/auth/me', tier: 'anonymous' },
