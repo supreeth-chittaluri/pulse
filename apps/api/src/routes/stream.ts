@@ -84,11 +84,11 @@ export function streamRoutes(options: StreamOptions): Router {
 
     const resume = parseCursor(req.get('last-event-id') ?? undefined);
 
-    // Comment padding, sent first. A buffering proxy will not forward anything
-    // until its buffer fills, and a stream that emits a few hundred bytes an
-    // hour never reaches that threshold -- so the client sees nothing at all
-    // and the connection looks broken rather than idle. EventSource ignores
-    // comment lines, so this costs one flush and nothing else.
+    // Comment padding, sent first. Precautionary: a buffering proxy forwards
+    // nothing until its buffer fills, and a stream emitting a few hundred bytes
+    // an hour never gets there, so the client sees nothing and the connection
+    // looks broken rather than idle. The current deployment does not buffer,
+    // but EventSource ignores comment lines so this costs one flush.
     if (paddingBytes > 0) write(res, `:${' '.repeat(paddingBytes)}\n\n`);
     write(res, `retry: 3000\n\n`);
 

@@ -20,16 +20,16 @@ const POLL_INTERVAL_MS = 5000;
 /**
  * Live updates, over SSE where that works and polling where it does not.
  *
- * The fallback is not defensive padding -- it is required. A reverse proxy that
- * buffers responses until they complete (Cloudflare in front of Render, which is
- * where this deploys) makes SSE undeliverable: the server writes events, the
- * proxy holds every byte, and the client waits forever on a connection that
- * looks open. Measured on the deployment, a response written in ten chunks
- * 300ms apart arrived as a single burst when it ended.
+ * SSE works on the current deployment -- measured in a browser, first event at
+ * 148ms. The fallback is for the hosts where it does not: a reverse proxy that
+ * buffers a response until it completes makes SSE undeliverable, because the
+ * server writes events, the proxy holds every byte, and the client waits on a
+ * connection that looks perfectly open. That is common enough behind corporate
+ * proxies and some CDN configurations to be worth handling.
  *
- * So the browser does not trust the connection opening. It waits for an actual
- * event, and if none arrives it switches to cursor-based polling — which works
- * anywhere, because each response completes.
+ * So the browser does not treat the connection opening as success. It waits for
+ * an actual event, and if none arrives it switches to cursor-based polling --
+ * which works anywhere, because each response completes.
  */
 export function useStream(handlers: StreamHandlers): Transport {
   const [transport, setTransport] = useState<Transport>('connecting');

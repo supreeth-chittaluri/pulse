@@ -1,365 +1,79 @@
 # pulse
 
-Detects unusual sentiment spikes for US equities by continuously ingesting
-retail and news chatter, scoring it with an LLM, and comparing each ticker
-against its own rolling baseline.
+**Finds the tickers people suddenly started talking about — and whether they're
+happy about it.**
 
-> **Status: M7 complete to the provider boundary.** Everything else runs end to
-> end: scheduled deduped ingestion,
-> sentiment scoring on Gemini's free tier, rolling-baseline spike detection, a
-> rate-limited API with three-tier auth, live push over SSE, and a dashboard
-> that updates without a refresh. Public deploy is next — see the plan below.
+[![tests](https://img.shields.io/badge/tests-247%20passing-1a7f37)](#testing)
+[![cost](https://img.shields.io/badge/running%20cost-%240-1a7f37)](#cost)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-2a78d6)](#stack)
+[![Node](https://img.shields.io/badge/Node-24-2a78d6)](#stack)
+[![Postgres](https://img.shields.io/badge/Postgres-17-2a78d6)](#stack)
+[![license](https://img.shields.io/badge/license-MIT-898781)](LICENSE)
+
+**[Live demo →](https://pulse-b8zd.onrender.com)**  ·  demo login
+`demo@pulse.local` / `demo-read-only` (read-only)
+
+> The demo runs on a free tier that sleeps after ~15 minutes without traffic, so
+> the first load may take up to a minute to wake. **A sleeping service also
+> ingests nothing** — observed directly while measuring, and the reason the
+> repo ships a keepalive workflow.
+
+<!-- TODO: replace with a recorded GIF of the live feed updating -->
+<p align="center"><em>(demo GIF goes here)</em></p>
 
 ---
 
 ## The problem
 
-Sentiment on a ticker is only interesting relative to its own normal. r/stocks
-mentions AAPL constantly; that's noise. r/stocks mentioning a small-cap forty
-times in an hour when it normally gets two is signal. So pulse doesn't
-threshold on raw sentiment — it maintains a per-ticker rolling baseline and
-flags statistical deviations from it.
+Sentiment on a ticker is only interesting **relative to its own normal**.
 
-## Stack
+r/stocks mentions AAPL constantly — that's background noise. r/stocks mentioning
+a small-cap forty times in an hour when it normally gets two is a signal. Most
+sentiment tools threshold on raw positivity and drown in the former.
 
-| Layer | Choice |
-| --- | --- |
-| Language | TypeScript throughout, npm workspaces monorepo |
-| Runtime | Node 22+ (uses native TypeScript type-stripping — no build step) |
-| Database | Postgres 17 |
-| Ingestion | RSS/Atom + Reddit OAuth, behind one `Source` interface |
-| Scoring | Gemini Flash Lite (`gemini-3.5-flash-lite`) structured output, free tier |
-| API | Express 5 |
-| Dashboard | React 19 + Vite, no state library, served by the API |
-| Tests | Vitest |
+pulse maintains a rolling baseline per ticker and flags statistical deviations
+from it, gating on *how much* something is discussed before caring *how* it is
+discussed. A sentiment swing measured over two mentions is noise; a volume surge
+with flat sentiment is usually just a scheduled news cycle. The combination is
+the thing worth an alert.
 
-## Layout
+## What it does
 
-```
-config/sources.json    Which feeds to poll. Edit without touching code.
-db/                    Schema migrations + idempotent runner
-packages/core/         Config loading, Postgres pool, logging, shared types
-packages/sources/      Source interface and its adapters
-apps/worker/           Ingestion worker (CLI today, scheduled in M1)
-apps/api/              Express API
-```
+- **Ingests** five subreddits, Hacker News and per-ticker Google News on a
+  schedule, deduped so re-running changes nothing.
+- **Extracts tickers without the LLM** — a regex plus the SEC's listed-symbol
+  list proposes candidates, so ~45% of posts never reach the model at all.
+- **Scores sentiment** with Gemini Flash Lite behind a hard validation layer:
+  every numeric bound re-checked locally, hallucinated tickers dropped, and the
+  returned post ids required to match the ones sent.
+- **Detects spikes** with a rolling per-ticker z-score on both volume and
+  sentiment, measured at a **0.05–0.20% false-positive rate**.
+- **Pushes live** to the dashboard over SSE, with a polling fallback for hosts
+  that buffer streamed responses.
+- **Alerts by SMS** when a watchlisted ticker spikes, behind four independent
+  spend brakes.
+- **Serves a public dashboard** anyone can open with no login, with a read-only
+  demo account and an admin role for anything that spends a resource.
 
-## Quick start
+## Measured
 
-```bash
-cp .env.example .env      # defaults work as-is for local development
-npm install
-npm run db:up             # Postgres 17 in Docker, host port 5433
-npm run db:migrate
-```
-
-Ingest:
-
-```bash
-npm run worker -- list-sources                 # what is configured, and via which adapter
-npm run worker -- fetch-once --source reddit:stocks --limit 5   # print only, writes nothing
-npm run worker -- ingest-once                  # one pass over every source, writes to Postgres
-npm run worker -- run                          # poll on schedule until Ctrl-C
-npm run worker -- status                       # stored counts and the last run per source
-```
-
-`ingest-once` paces itself through the Reddit gate, so a full pass takes about
-four minutes: five Reddit sources at one request per minute. That is expected,
-not a hang.
-
-Verify the API:
-
-```bash
-npm run dev:api
-curl localhost:3000/health
-# {"status":"ok","db":"up","redditAdapter":"reddit-rss","sources":9,...}
-```
-
-Tests and typecheck:
-
-```bash
-npm test          # needs `npm run db:up`; DB-backed tests skip loudly without it
-npm run typecheck
-```
-
----
-
-## Why ingestion is source-agnostic
-
-Reddit closed self-service OAuth app registration in late 2025 under its
-Responsible Builder policy — new clients now wait in a manual approval queue
-with no guaranteed outcome. Blocking this project on that queue was not
-acceptable, so every source implements one interface:
-
-```ts
-interface Source {
-  readonly id: string;
-  readonly adapter: string;
-  readonly pollSeconds: number;
-  fetch(): Promise<RawPost[]>;
-}
-```
-
-Two Reddit adapters sit behind it:
-
-| Adapter | Auth | Ceiling | Status |
-| --- | --- | --- | --- |
-| `reddit-rss` | none | ~50 posts/feed, no scores or comments | **active** |
-| `reddit-oauth` | client credentials | 100 posts/call, scores, 100 QPM | dormant |
-
-The registry picks between them purely on whether `REDDIT_CLIENT_ID` and
-`REDDIT_CLIENT_SECRET` are set. Both emit the same `sourcePostId` (the Reddit
-fullname, e.g. `t3_1abc234`) and the same source id, so switching adapters
-later will not re-ingest history as new posts. There is a test pinning exactly
-this. Hacker News and Google News feeds hedge the dependency further: if Reddit
-disappears entirely, ingestion keeps running.
-
-### Reddit rate limiting (measured, not assumed)
-
-Reddit's `.rss` limiter is **per client across all feeds**, not per feed, and
-budgets roughly one request per minute. Three back-to-back fetches of different
-subreddits produced a 429 during M0 testing. Consequences:
-
-- Reddit adapters retry with 8s/16s/32s backoff, not the 1s/2s/4s default.
-- Every Reddit source declares `rateLimitBucket: 'reddit'` and queues behind a
-  shared `MinIntervalGate` at one request per 60s (M1).
-- Reddit sources poll at 600s, so five subreddits land near one Reddit request
-  per 120s — inside budget with headroom for retries. `config/sources.json`
-  enforces a floor, and a test pins it.
-
-## Schema
-
-`db/001_init.sql`. One deviation from the original spec worth flagging: the
-spec had a single `signals` table carrying one ticker, but posts routinely
-mention several tickers and dedupe keys on the *post*. So:
-
-- **`posts`** — raw ingested content, `UNIQUE (source, source_post_id)`. This is
-  what M1 dedupes against.
-- **`signals`** — one row per (post × ticker), written by M2. A post mentioning
-  NVDA and AMD produces two signals.
-- **`baselines`**, **`watchlist`**, **`users`** — as specified.
-- **`ingest_runs`** (M1, also not in the spec) — one row per fetch attempt, with
-  counts and any error. Makes unattended runs observable, is the source of M9's
-  posts/day metric, and will back last-run reporting on `/health`.
-
-## Configuration
-
-All secrets live in `.env`, which is gitignored. `.env.example` is committed
-with every key present and blank. Currently tracking 5 subreddits, the Hacker
-News front page, and three per-ticker Google News queries.
-
----
-
-## Milestones
-
-| # | Milestone | Acceptance | Status |
-| --- | --- | --- | --- |
-| **M0** | Verify + scaffold | Worker prints raw posts from one subreddit; `GET /health` returns 200 | ✅ done |
-| **M1** | Ingestion pipeline | Two consecutive runs create no duplicate rows; a scheduled run fires unattended | ✅ done |
-| **M2** | LLM sentiment scoring | Tests over hand-labeled sample posts confirm extraction is reasonable | ✅ live; eval awaiting labels |
-| **M3** | Spike detection | Tests prove the z-score formula flags a synthetic spike and ignores normal noise | ✅ done |
-| **M4** | API + auth model | Demo role hitting an admin endpoint returns 403; the 61st request in a minute is throttled | ✅ done |
-| **M5** | Real-time push | A new signal appears live in two open browser tabs | ✅ done |
-| **M6** | Frontend dashboard | Live feed, per-ticker trends, watchlist; read-only demo login; end to end against local API | ✅ done |
-| **M7** | SMS alerting | A simulated spike on a watched ticker delivers a real SMS | ◑ verified to the provider boundary — see note |
-| **M8** | Public deploy + abuse audit | Every public/demo endpoint re-checked to confirm none can trigger Gemini, Twilio, or an on-demand scrape; a stranger can load the dashboard with no login | ◑ audit + deploy config done; deploy needs your accounts |
-| **M9** | Polish + measure | Product README with measured ingestion volume, scoring latency, detection accuracy, and push latency | |
-
-## How ingestion runs
-
-`npm run worker -- run` polls every source on its own interval, **serially**.
-Nine sources at about a second each is nothing, and serial execution removes any
-chance of two Reddit fetches overlapping.
-
-- **Dedupe** is the database's job: a batched
-  `INSERT ... ON CONFLICT (source, source_post_id) DO NOTHING RETURNING id`.
-  No read-then-write, so re-running ingestion is a no-op and concurrent workers
-  cannot race.
-- **Pacing** is the `MinIntervalGate`'s job. Sources sharing a bucket queue
-  behind each other; unrelated sources pass straight through.
-- **Failure isolation**: one source throwing never stops the loop. It backs off
-  exponentially (interval × 2^failures, capped at 1h) and returns to its normal
-  cadence on the next success. At a 600s interval a dead feed settles at one
-  retry per hour by its third failure.
-- **Jitter** of ±10% keeps sources from converging into a thundering herd after
-  a restart.
-- **Shutdown**: SIGINT/SIGTERM finish the current fetch and exit. The
-  scheduler's own sleeps are chunked at 500ms, and the rate-limit gate's wait
-  takes the same abort signal — without that, a SIGTERM arriving during a 60s
-  gate wait sat unanswered for the rest of the interval, long enough for a
-  platform with a 30s kill grace to hard-kill the worker mid-fetch. A second
-  signal exits immediately.
-
-## Sentiment scoring (M2)
-
-Scoring runs **on demand only** — never on a schedule. The Gemini free tier is a
-fixed daily request quota rather than a bill, so consuming it should be a
-deliberate act.
-
-```bash
-npm run worker -- score-once --dry-run   # what would be sent; calls nothing
-npm run worker -- score-once --limit 60  # actually score
-```
-
-### Two halves, and only one of them costs quota
-
-Ticker extraction is **not** the model's job. A regex plus an allowlist of real
-listed symbols proposes candidates; the model only judges whether each candidate
-is really a ticker mention in context and how the post feels about it.
-
-A post with no candidate ticker is marked scored with zero signals and **never
-reaches the model**. Measured over the first full scoring run of 575 real posts:
+Real numbers from real runs, not estimates:
 
 | | |
-|---|---:|
-| Posts considered | 575 |
-| Filtered out locally, zero quota | 258 (45%) |
-| Sent to the model | 317 |
-| **Requests used** | **22** of 500/day |
-| Signals produced | 331 across 91 tickers |
-| Failures | 0 |
-| Mean request latency | 5.3s (max 8.2s), 15 posts each |
-| Tokens in / out | 62,828 / 41,549 |
+|---|---|
+| Ingestion volume | **INGEST_RATE_PLACEHOLDER** |
+| Posts filtered before the model | **45%** (258 of 575) — free, deterministic |
+| Scoring throughput | 317 posts in **22 requests** (15 per batch) |
+| Scoring latency | **5.3s** mean per request · 386ms per post · max 8.2s |
+| Token cost | 62.8K in / 41.5K out for 317 posts |
+| Spike false-positive rate | **0.05–0.20%** over 2,000 simulated series per cell |
+| Spike detection at 5× volume | **98.7–100%** |
+| Update latency (SSE, local) | **108ms** median, insert → browser |
+| Live stream first event (production) | **148ms** from connect |
+| Update latency (polling fallback) | 5s interval |
+| Running cost | **$0** |
 
-Sentiment split: 168 bullish, 64 bearish, 99 neutral; mean confidence 0.78.
-
-The allowlist comes from the SEC's [`company_tickers.json`](https://www.sec.gov/files/company_tickers.json)
-(committed to the repo, refresh with `node scripts/refresh-tickers.ts`). That
-file contains **operating companies only, no ETFs**, so a short curated ETF list
-is merged in — otherwise SPY, QQQ and IWM, three of the most-discussed symbols
-on these subreddits, would be invisible to the extractor. A stoplist suppresses
-real symbols that are ordinary words in context (`DD`, `IT`, `OPEN`, `A`) unless
-written as an explicit cashtag.
-
-### Staying inside the quota
-
-Google no longer publishes per-model free-tier limits in its docs — they are
-project-specific and visible only at
-[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit).
-Read yours before changing anything below. Ours, measured 2026-09-04:
-
-| Model | RPM | TPM | **RPD** |
-|---|---:|---:|---:|
-| `gemini-3.5-flash` | 5 | 250K | **20** |
-| `gemini-3.5-flash-lite` | 15 | 250K | **500** |
-
-Widely-cited third-party guides claimed ~1,500 RPD for Flash. The real figure
-for this project is **20** — off by 75×. Do not size anything off a blog post.
-
-That gap decides the model: Flash's 20 requests/day cannot clear even a single
-22-request backlog, so scoring runs on **Flash Lite**. Sentiment classification
-on short posts sits comfortably in Lite's range.
-
-The guardrails, in the same order they fire:
-
-- **Client-side throttle.** Gemini shares the `MinIntervalGate` built for
-  Reddit, at one request per 4s — Flash Lite's 15 RPM ceiling exactly.
-- **Hard local daily ceiling.** `GEMINI_DAILY_REQUEST_BUDGET` (400, under the
-  real 500) is checked against `llm_requests` before every request, counted over
-  the **Pacific** day because that is when Google's quota resets.
-- **Provider 429s stop the run** rather than hammering a spent quota.
-
-TPM is not a constraint at our size: a 15-post batch is roughly 4–5K tokens, so
-even at the full 15 RPM we use about 70K of the 250K TPM allowance.
-
-At ~500–1000 ingested posts/day, steady-state scoring is roughly 20–40 requests
-per day — under 10% of the daily quota.
-
-> **Two free-tier caveats worth knowing.** Enabling billing on the Google Cloud
-> project **removes the free tier for that project entirely** — keep the key on a
-> billing-off project. And on the free tier Google's terms permit using submitted
-> prompts to improve their models; everything pulse sends is already-public
-> Reddit/HN/news text, but the tradeoff is real.
-
-### Measuring it
-
-`npm run eval:export` writes a stratified sample of scored posts to
-`eval/labels.jsonl` as a labeling worksheet. **The model's own predictions are
-deliberately excluded from that file**: labels anchored on what the model
-already said would mostly measure agreement with itself, and since the same
-author wrote the prompt, that circularity would be invisible in the final
-number.
-
-Fill in `label_is_ticker` and `label_sentiment`, then:
-
-```bash
-npm run eval:scoring            # re-score the labeled posts and grade (~2 requests)
-npm run eval:scoring -- --stored  # grade the stored signals instead (0 quota)
-```
-
-It reports ticker-mention precision/recall/F1, sentiment sign agreement over a
-±0.2 neutral band, mean absolute error, and lists every disagreement so a bad
-number points at specific posts rather than a vibe.
-
-### Validation is ours, not the provider's
-
-Gemini's structured output honours only a **subset** of JSON Schema — notably it
-does not enforce numeric `minimum`/`maximum`. So the API schema constrains shape
-only, and every bound is re-checked locally with Zod. On top of the schema:
-
-- **post_id alignment.** The set of ids returned must exactly match the set sent.
-  Batching 15 posts invites the model to drop, duplicate or invent an entry, and
-  a shuffled result would attach one post's sentiment to another post's row with
-  nothing downstream able to notice.
-- **Hallucinated tickers are dropped.** A symbol that was never offered as a
-  candidate is discarded, not stored.
-- **Batch failure degrades gracefully.** An invalid batch response is retried one
-  post per request, so one bad entry cannot cost fourteen good posts.
-- **Atomic writes.** Signals and `scored_at` commit in one transaction, so a
-  crash can never mark a post scored with no signals.
-- **Poison posts drop out.** Three failed attempts and a post leaves the queue.
-
-## Spike detection (M3)
-
-```bash
-npm run worker -- detect-spikes            # test the last complete hour
-npm run worker -- detect-spikes --window 3 # test 3 hours back
-npm run worker -- detect-spikes --dry-run  # compute baselines, record nothing
-```
-
-It also runs automatically every 5 minutes inside `worker -- run`. Detection
-calls no external service and costs nothing, so unlike scoring it belongs on a
-timer rather than behind a manual command.
-
-### Volume gates, sentiment classifies
-
-Two z-scores per ticker, because either alone is misleading: a sentiment swing
-measured over two mentions is noise, and a volume surge with flat sentiment is
-usually just a news cycle. Volume is the gate — nothing fires without a real
-surge in discussion — and sentiment then classifies the result as `volume` or
-`volume+sentiment`. Only the latter will earn an SMS in M7.
-
-### Three things that make or break this
-
-**The baseline must exclude the window it is judging.** If the tested hour also
-feeds the baseline, a large spike raises the mean and inflates the spread,
-suppressing its own z-score: the bigger the event, the less it fires. There is a
-test asserting the clean score exceeds the contaminated one.
-
-**Averages are less noisy than what they average.** Sentiment compares a *mean*
-of n observations against the baseline, so it divides by the standard error
-(`σ/√n`), not by σ. A real swing of +0.6 against an individual-level σ of 0.4
-looks like a forgettable z=1.5 the naive way, and z=4.7 done correctly. Skip
-this and the detector quietly misses every genuine sentiment shift.
-
-**Empty hours count.** Volume baselines include hours with zero mentions.
-Averaging only the hours that happen to contain data answers "how many mentions
-does this ticker get in an hour where it is mentioned at all" — which is near 1
-for everything and useless.
-
-Plus the guards: a Poisson variance floor (`√mean`) so a ticker that sat at zero
-all week cannot score infinity on one mention; minimum 20 observations across 3
-distinct hours before a baseline exists at all; an absolute floor of 5 mentions
-so 0 → 1 cannot fire; and a 6-hour per-ticker cooldown.
-
-Google News feeds are **excluded from volume** (they poll on a timer, so their
-near-constant rate shrinks the baseline variance and makes ordinary fluctuation
-look significant) but still **counted for sentiment**, where cadence distorts
-nothing.
-
-### Measured operating characteristics
-
-Over 2,000 simulated series per cell, at the default `z ≥ 3.0`:
+Spike detector operating characteristics, at the default `z ≥ 3.0`:
 
 | Baseline rate | 1× (no spike) | 2× | 3× | 5× | 10× |
 |---|---:|---:|---:|---:|---:|
@@ -367,340 +81,109 @@ Over 2,000 simulated series per cell, at the default `z ≥ 3.0`:
 | 10/hr | **0.20%** | 51.8% | 97.5% | 100% | 100% |
 | 25/hr | **0.15%** | 91.0% | 99.9% | 100% | 100% |
 
-The 1× column is the false-positive rate. Both bounds are pinned by tests, so a
-change to the formula cannot quietly trade detection power for quiet.
+The 1× column is the false-positive rate. Both bounds are pinned by tests — a
+detector that never fires also never false-positives, so asserting only one side
+would prove nothing.
 
-The default threshold is 3.0 rather than the schema's 2.5: at 2.5 across ~90
-tickers checked hourly, noise alone yields roughly one false alert an hour.
-`watchlist.alert_threshold` still overrides it per ticker.
+That 2× row is honest rather than flattering: a doubling at 4 mentions/hour is
+caught 22% of the time. On a Poisson process 4→8 genuinely is not
+distinguishable from luck. Volume buys confidence.
 
-## API and auth (M4)
+## Stack
 
-```bash
-npm run db:seed    # creates the demo and admin accounts from .env
-npm run dev:api
-```
+| Layer | Choice |
+|---|---|
+| Language | TypeScript, npm workspaces monorepo |
+| Runtime | Node 24 — native type stripping, no build step server-side |
+| Database | Postgres 17 |
+| Ingestion | RSS/Atom + Reddit OAuth behind one `Source` interface |
+| Scoring | Gemini `gemini-3.5-flash-lite`, structured output + Zod validation |
+| API | Express 5 |
+| Dashboard | React 19 + Vite, no state library, served by the API |
+| Live updates | SSE with a cursor-based polling fallback |
+| Alerting | Twilio REST |
+| Tests | Vitest — 247, against real Postgres where the constraint *is* the logic |
+| Deploy | Neon + a single Render web service |
 
-### Three tiers, one boundary
-
-| Tier | Who | Can do |
-|---|---|---|
-| **anonymous** | anyone | every read, no token at all |
-| **demo** | seeded account | identical reads, plus a signed-in UI state |
-| **admin** | credentials in `.env` only | writes, and anything that spends quota |
-
-Demo grants **no extra data access** — it exists for the M6 login narrative.
-That keeps the security boundary in exactly one place: *reads are public,
-mutations are admin*. Reads must be anonymous because M8's acceptance is that a
-stranger can open the dashboard with no login, and there is a test asserting
-that now rather than discovering it at deploy time.
-
-`requireRole('admin')` sits on the **mount**, not on individual routes, so a
-route added to `adminRoutes` later inherits the guard rather than needing to
-remember it. A test hits an unknown path under `/api/admin` and expects 403/401
-to prove the mount is what enforces it.
-
-### Endpoints
-
-```
-GET  /health                     GET  /api/tickers
-GET  /api/stats                  GET  /api/tickers/:ticker     trend + recent signals
-GET  /api/signals                POST /api/auth/login
-GET  /api/spikes                 GET  /api/auth/me
-                                 POST /api/auth/signup         403 + demo-mode message
-
-GET    /api/admin/watchlist            admin
-POST   /api/admin/watchlist            admin
-DELETE /api/admin/watchlist/:ticker    admin
-GET    /api/admin/scoring-status       admin — backlog and remaining quota
-POST   /api/admin/score                admin — SPENDS GEMINI QUOTA
-```
-
-`POST /api/admin/score` is the most sensitive route in the application. On a
-metered API a leaked trigger costs money; on a fixed free quota it is a denial
-of service — a stranger drains the day and scoring dies until midnight Pacific.
-It exists only because M8 deploys to a platform with no shell, and it is capped
-at 60 posts (4 requests, ~25s) so even a stolen admin token cannot drain the
-quota in one call. The tradeoff: the API process needs `GEMINI_API_KEY`, where
-the worker would otherwise be the only holder.
-
-### Rate limiting and caching
-
-60 requests/minute per IP on public routes, 10/minute on admin, 10/minute on
-login specifically. The 61st request in a minute returns 429 with `Retry-After`.
-Anonymous GETs are cached in-process for 20s.
-
-**The limiter is in-process, and that is a real limitation.** Free-tier hosting
-has no Redis, and a Postgres-backed counter would mean a write per request. The
-window resets on restart, and two instances would each allow the full budget.
-Correct for one small instance; needs a shared store the moment this scales.
-
-**Deployment trap:** behind Render/Fly/Vercel, `req.ip` is the proxy unless
-`TRUST_PROXY=1`. Without it every request shares one bucket and the first client
-to hit 60 locks out everyone.
-
-The cache never serves a body to a request carrying an `Authorization` header —
-a cached response handed to the wrong person is the classic way this feature
-goes wrong, so it is asserted by a test.
-
-### Credentials
-
-Passwords use `node:crypto` scrypt (N=2¹⁵) — built in, so no native module and
-no third-party supply chain on the one thing that must not be compromised. The
-cost parameters are stored in the hash, so they can be raised later without
-invalidating existing accounts. Login burns comparable time when the account
-does not exist, and returns an identical response, so it cannot be used to
-enumerate emails.
-
-`JWT_SECRET` must be at least 32 characters and **production refuses to start
-without it** — a predictable signing key is a complete auth bypass. Development
-falls back to a random per-process key, so tokens stop working across restarts
-rather than a checked-in default silently reaching production. The admin
-password has no default at all; seeding refuses to create an admin without one.
-
-## Live push (M5)
+## Running it
 
 ```bash
-npm run dev:api        # then open http://localhost:3000/stream in two tabs
-npm run worker -- score-once --limit 15
+cp .env.example .env      # defaults work for local development
+npm install
+npm run db:up             # Postgres 17 in Docker, host port 5433
+npm run db:migrate
+npm run db:seed
 ```
-
-Both tabs update with no refresh. That throwaway page is superseded by M6's
-dashboard; it exists so the acceptance criterion is demonstrable now.
-
-### SSE, with a polling fallback that turned out to be mandatory
-
-The traffic is one-directional, so SSE is the right primitive: plain HTTP, no
-upgrade to negotiate, `EventSource` reconnects on its own, no dependency.
-
-**It does not work behind every host.** A reverse proxy that buffers a response
-until it completes makes SSE undeliverable — the server writes events, the proxy
-holds every byte, and the browser sits on a connection that looks open forever.
-Measured on the Render deployment (Cloudflare in front), a response written in
-ten chunks 300ms apart arrived as one burst the instant it ended:
-
-```
-server wrote:      +0ms  +301ms  +602ms  …  +2706ms
-client received:   +0ms    +0ms    +0ms  …     +30ms   ← all at the end
-```
-
-`/api/stream/selftest` reproduces that in one request against any deployment.
-
-So the browser does not trust the connection opening. It waits for a real event
-and, if none arrives within 6s, switches to cursor-based polling of
-`/api/signals?afterId=` — which works anywhere, because each response completes.
-The masthead shows which transport is live (`live` versus `live (polled)`).
-
-That is the same shape as the two other fallbacks in this project: prefer the
-better mechanism, detect that it is not working, degrade instead of failing.
-
-### Bridging two processes
-
-The **worker** writes signals; the **API** holds the connections. A trigger on
-`signals`/`spikes` INSERT calls `pg_notify`, so *every* writer publishes — the
-worker, `POST /api/admin/score`, M7's alerting, even a manual SQL insert. An
-application-level publish is a thing someone forgets exactly once, after which
-the stream is quietly incomplete.
-
-The notification payload is only a row id, and even that is just a wake-up: the
-hub keeps its own cursor and re-queries from it, so a notification dropped while
-nothing was listening is harmless rather than a permanently missed row.
-
-`LISTEN/NOTIFY` needs a dedicated, non-pooled connection, and a transaction-mode
-pooler can break it in the nastiest possible way: it accepts `LISTEN` without
-error and then never delivers, so the stream reports healthy and silently never
-fires.
-
-So the listener does not assume. At startup it fires a probe notification
-**from the application pool** — the same path a real trigger takes — and falls
-back to 2s polling if it does not arrive, then falls back again if the
-connection later dies. `/health` reports the result, alongside the serving
-commit so you can tell a redeploy from a free-tier wake-up.
-
-The "from the pool" part is the whole trick: an earlier version notified on the
-listening connection itself, which a pooler permits, so it reported healthy on
-exactly the configuration it was written to catch.
-
-### Correctness details
-
-- **Resume is exact.** Signals and spikes have independent id sequences, so the
-  SSE event id is the pair `signalId-spikeId`. `EventSource` returns it as
-  `Last-Event-ID` on reconnect and the server replays precisely what was missed
-  — no gap, no duplicate.
-- **Bursts coalesce.** Scoring writes ~15 signals at once; a 100ms debounce
-  turns that into one query and one flush.
-- **Concurrency is bounded** (100 total, 3 per client). A public endpoint
-  holding sockets open is a memory exhaustion vector, and the request rate
-  limiter cannot help — one SSE connection is a single request that lives for
-  hours. The stream route is mounted before the limiter and cache for the same
-  reason; caching a stream would be actively wrong.
-- **Heartbeat every 25s**, because proxies commonly kill idle connections at
-  30–60s, plus `X-Accel-Buffering: no` so nginx-style buffering does not hold
-  events until a buffer fills.
-
-### A note on testing this
-
-Connection accounting lives in `ConnectionRegistry` and is tested directly.
-Asserting it over live sockets was unreliable: whether a disconnect is observed
-depends on the HTTP client and its pooling, and when client and server share one
-process under the test runner, socket closes are not delivered dependably —
-`fetch` also tears down a response whose body is never read. The behaviour was
-verified correct against a real out-of-process client; the unit tests pin the
-logic without that ambiguity.
-
-## Dashboard (M6)
 
 ```bash
-npm run build:web && npm run start:api   # http://localhost:3000
+npm run worker -- run     # ingest + detect spikes, on a schedule
 ```
-
-For UI work, `npm run dev:web` runs Vite with hot reload and proxies `/api` to
-the API on port 3000.
-
-### Served by the API, not deployed separately
-
-One origin means no CORS to configure, no cross-site cookie rules, and an SSE
-connection that is same-origin by construction. The alternative — the SPA on
-Vercel, the API on Render — buys nothing here and costs a CORS surface that M8
-would then have to audit. Express serves the built assets with a long cache
-(filenames are content-hashed) and `index.html` with none, mounted after every
-API route so it can never shadow one.
-
-### Charts
-
-**Sentiment and volume are two stacked plots sharing an x-axis, never a dual
-y-axis.** They are different measures on different scales, and putting two
-y-scales on one frame lets whoever drew it manufacture whatever crossing point
-suits the story. Two plots, one time axis, no illusions.
-
-Sentiment is a **diverging** measure, so it gets two opposite hues with a
-neutral grey midpoint: blue above zero, red below, with the zero baseline drawn
-heavier than the gridlines. Red for bearish matches finance convention; the
-bullish pole is **blue rather than green** because red/green is the classic
-colour-blind failure. The pair was validated rather than eyeballed — CVD
-separation ΔE 21.6 light / 19.2 dark against a ≥ 8 target — and hue never
-carries meaning alone: every score is printed with an explicit sign beside it.
-
-The sentiment axis is pinned to the full −1..+1 range instead of auto-scaling,
-because a rescaled axis makes a trivial wobble look like a crisis. Neutral is
-the same ±0.2 deadband spike detection uses, so the UI never calls something
-bullish that M3 treats as flat — there is a test pinning the two together.
-
-Both themes are selected sets of steps for their own surface, not an inversion,
-and dark mode is declared under the OS preference *and* an explicit theme stamp.
-
-### Auth in the UI
-
-The token is held **in memory only, never `localStorage`** — anything in
-`localStorage` is readable by any script that gets injected into the page.
-Losing the session on refresh is a small price, and the demo account is
-read-only regardless.
-
-Demo shows a banner saying so and renders the watchlist as an explanation
-instead of controls that would 403. The signup form is genuinely refused by the
-server (403 + the private-demo message) rather than pretending to succeed.
-
-## SMS alerting (M7)
 
 ```bash
-npm run worker -- alerts --dry-run   # renders messages, needs no credentials
-npm run worker -- alerts             # SENDS SMS — costs money
+npm run build:web && npm run start:api    # dashboard on :3000
 ```
 
-**This is the only part of pulse that costs money**, so it is off by default:
-`alerts` refuses to send unless `ALERTS_ENABLED=true` *and* all four Twilio
-variables are set. `--dry-run` needs neither and is the way to check what would
-go out.
+Scoring is **on demand**, because it spends a finite daily quota:
 
-### Verified to the provider boundary
+```bash
+npm run worker -- score-once --dry-run    # what it would send, and how much
+npm run worker -- score-once --limit 60
+```
 
-The live send is **deliberately not part of this project's acceptance**: a
-Twilio number is a recurring monthly cost, and this is a portfolio demo that
-otherwise runs at $0. Everything up to the HTTP call to Twilio is tested against
-a fake notifier — message composition and the 160-character segment cap, the
-retry policy, masked storage, the duplicate-send constraint, and all four spend
-brakes below. What is unexercised is one authenticated form POST and Twilio's
-own response parsing.
+Full command list: `npm run worker -- --help`.
 
-Enabling it is a `.env` change and nothing else: fill in the four `TWILIO_*`
-variables, set `ALERTS_ENABLED=true`, and run `npm run worker -- alerts`.
+## Testing
 
-### Four independent brakes
+```bash
+npm test          # needs `npm run db:up`; DB-backed tests skip loudly without it
+npm run typecheck
+```
 
-This is the one code path that can spend money in a loop, so no single check is
-trusted:
+Database-backed tests run against a real throwaway Postgres rather than mocks,
+because in several places the constraint *is* the behaviour under test —
+mocking the unique index that prevents duplicate SMS would leave the guarantee
+untested.
 
-1. **The watchlist is the opt-in.** A spike on a ticker nobody added is
-   recorded, shown on the dashboard, and never texted.
-2. **Kind filter.** Only `volume+sentiment` by default. A volume surge with flat
-   sentiment is usually a scheduled news cycle, and an alert channel that fires
-   on those gets muted within a week — which is worse than no alerts.
-3. **Per-ticker cooldown** (6h), tracked in the database *and* in memory within a
-   run, so two spikes on one ticker in one pass cannot both fire.
-4. **Rolling 24h budget** (10 messages). Even if all three above are wrong,
-   spend is capped.
-
-Plus a spike-age cutoff, so restarting after a week of downtime cannot flood you
-with a backlog of stale alerts.
-
-### Not sending twice is a database constraint, not a check
-
-`alerts` is unique on `(spike_id, channel)`. One spike produces at most one SMS,
-so a restart, a re-run, or a concurrent worker cannot text you twice — the
-guarantee is the constraint, not a prior read that could race.
-
-A **non-retryable** failure (bad number, bad credentials — a 4xx) is *recorded*
-against the spike so it is never attempted again; retrying those spends money to
-fail identically. A **retryable** failure (429, 5xx, network) is deliberately not
-recorded, so it comes back on the next run.
-
-The destination is stored masked (`+1******4821`). The real number lives in
-`.env`; there is no reason for the database, the logs, or a screenshot of either
-to carry it in clear. Messages are kept under 160 characters because Twilio bills
-per segment — there is a test pinning that.
-
-Twilio is called over its REST API directly rather than through the SDK. Sending
-an SMS is one authenticated form POST, and this is the one path where an
-unexpected retry costs money, so it is worth being able to read all of it.
-
-## Abuse audit (M8)
-
-No public or demo-role endpoint may trigger Gemini, Twilio, or an on-demand
-scrape. On a metered API that would be a bill; on a fixed free quota and a
-per-message SMS cost it is worse — a stranger can exhaust the day's scoring
-quota, or run up a phone bill, from a browser.
-
-That is enforced by a test rather than a checklist, because checklists get read
+The abuse audit is a test rather than a checklist, since checklists get read
 once and then rot:
 
 ```bash
 npx vitest run apps/api/src/abuse-audit.test.ts
 ```
 
-| Layer | What it proves |
-|---|---|
-| **Coverage** | Every route the router exposes is classified. Adding one without classifying it fails the audit. |
-| **Behaviour** | With `fetch` stubbed, every anonymous and demo route makes **zero outbound requests**. Gemini, Twilio and every source go over `fetch`, so one assertion covers all three hazards — and it runs against a *fully configured* instance, so it proves the guards hold rather than that an unconfigured box cannot spend. |
-| **Structure** | The module graph from the anonymous route files never reaches `@pulse/scoring` or `@pulse/alerting`. A future edit wiring one in fails immediately, not at the first invoice. |
-
-The scoring trigger is admin-only (401 anonymous, 403 demo) and capped at 60
-posts per call, so even a stolen admin token cannot drain a day's quota in one
-request.
-
-Deployment is documented in **[DEPLOY.md](DEPLOY.md)**: Neon + a single Render
-web service running the API, the dashboard, and ingestion in one process,
-because free tiers bill background workers but not web services.
+It proves no anonymous or demo route can reach Gemini, Twilio, or an on-demand
+scrape — behaviourally (with `fetch` stubbed, on a *fully configured* instance)
+and structurally (the module graph from public routes never reaches the paid
+providers).
 
 ## Cost
 
-Ingestion and scoring are free. Twilio is the only paid component, and it stays
-off until you enable it. Ingestion is public RSS; scoring is Gemini's
-free tier.
+**$0.** Ingestion is public RSS; scoring runs inside Gemini's free tier at
+roughly 20–40 requests/day against a 500/day allowance; hosting is Neon and
+Render free tiers. Twilio is the only component that would cost money and it
+stays off unless explicitly enabled.
 
-| Service | Cost | From |
-| --- | --- | --- |
-| RSS sources (Reddit, HN, Google News) | free | M0 |
-| Reddit OAuth, non-commercial | free ≤100 QPM | if approved |
-| Gemini Flash | **$0** — free tier, no card. See the scoring section for how we stay inside the quota | M2 |
-| **Twilio** | **the only real cost**: ~$1.15/mo number + ~$0.008/SMS | M7 |
-| Hosting (Neon, Render, Vercel free tiers) | free | M8 |
+## Documentation
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how it works and why, including the
+  decisions that were measured rather than assumed
+- **[DEPLOY.md](DEPLOY.md)** — deploying to free tiers, and the limitations
+  that come with them
+
+## Status
+
+Built in nine milestones, M0 through M9. Two things are deliberately incomplete:
+
+- **SMS alerting is verified to the provider boundary**, not through it. A
+  Twilio number is a recurring cost and this project otherwise runs at $0.
+  Message composition, retry policy, masked storage, the duplicate-send
+  constraint and all four spend brakes are tested against a fake notifier;
+  what is unexercised is one authenticated form POST.
+- **The scoring eval awaits hand labels.** `eval/labels.jsonl` holds 25
+  stratified posts and 48 ticker judgements. The model's own predictions are
+  excluded from that file on purpose — labels anchored on them would mostly
+  measure agreement with itself.
+
+## License
+
+MIT
