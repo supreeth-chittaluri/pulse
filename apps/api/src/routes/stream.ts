@@ -9,8 +9,18 @@ export type StreamOptions = {
   /** Total concurrent streams this process will hold. */
   maxConnections?: number;
   maxConnectionsPerIp?: number;
-  /** Proxies commonly kill idle connections at 30-60s. */
+  /**
+   * Proxies commonly kill idle connections at 30-60s, and some will not flush
+   * a response until they have seen traffic.
+   */
   heartbeatMs?: number;
+  /**
+   * Bytes of comment padding sent before anything else. Some reverse proxies
+   * (Cloudflare in front of Render, nginx with default buffering) hold a
+   * response until their buffer fills, which makes a low-volume stream look
+   * completely dead. 0 disables it.
+   */
+  paddingBytes?: number;
   /** Events replayed to a reconnecting client. */
   backfillLimit?: number;
 };
@@ -40,7 +50,8 @@ export function streamRoutes(options: StreamOptions): Router {
     logger,
     maxConnections = 100,
     maxConnectionsPerIp = 3,
-    heartbeatMs = 25_000,
+    heartbeatMs = 15_000,
+    paddingBytes = 4096,
     backfillLimit = 50,
   } = options;
 
@@ -72,18 +83,36 @@ export function streamRoutes(options: StreamOptions): Router {
     res.flushHeaders?.();
 
     const resume = parseCursor(req.get('last-event-id') ?? undefined);
+
+    // Comment padding, sent first. A buffering proxy will not forward anything
+    // until its buffer fills, and a stream that emits a few hundred bytes an
+    // hour never reaches that threshold -- so the client sees nothing at all
+    // and the connection looks broken rather than idle. EventSource ignores
+    // comment lines, so this costs one flush and nothing else.
+    if (paddingBytes > 0) write(res, `:${' '.repeat(paddingBytes)}\n\n`);
     write(res, `retry: 3000\n\n`);
 
     // Replay what this client missed while disconnected. Without it a dropped
     // connection leaves a permanent hole in the feed.
+    let backfilledCount = 0;
     try {
       const missed = await hub.backfill(resume ?? hub.cursor, backfillLimit);
       for (const event of missed) sendEvent(res, event);
+      backfilledCount = missed.length;
     } catch (err) {
+      backfilledCount = -1;
       logger.error('stream backfill failed', { error: (err as Error).message });
     }
 
-    write(res, `event: ready\ndata: ${JSON.stringify({ cursor: formatCursor(hub.cursor) })}\n\n`);
+    write(
+      res,
+      `event: ready\ndata: ${JSON.stringify({
+        cursor: formatCursor(hub.cursor),
+        // Surfaced so a client (or a curl) can tell "no history" apart from
+        // "backfill failed", which look identical otherwise.
+        backfilled: backfilledCount,
+      })}\n\n`,
+    );
 
     const unsubscribe = hub.subscribe((event) => sendEvent(res, event));
 

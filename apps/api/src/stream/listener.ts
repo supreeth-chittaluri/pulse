@@ -30,17 +30,23 @@ export type ProbeConnection = {
 };
 
 /**
- * Proves notifications actually round-trip on this connection.
+ * Proves notifications actually round-trip to this connection.
  *
- * A pooler in transaction mode (pgBouncer, which is what Neon's pooled endpoint
- * is) accepts LISTEN without error and then never delivers anything: the NOTIFY
- * lands on a different backend. Trusting a successful LISTEN would report a
- * healthy stream that silently never fires -- the worst kind of failure,
- * because nothing looks wrong from outside.
+ * The NOTIFY must come from a DIFFERENT connection than the one listening,
+ * because that is the path the real triggers take: they fire on whatever pooled
+ * connection performed the INSERT. A probe that notifies itself proves only
+ * that one session can talk to itself, which a transaction-mode pooler happily
+ * allows while still never delivering cross-connection traffic -- so a
+ * self-notify probe reports healthy on exactly the setup it exists to catch.
  */
 export async function probeNotifyDelivery(
   connection: ProbeConnection,
   timeoutMs: number,
+  /**
+   * Issues the NOTIFY. Defaults to the listening connection, but production
+   * MUST pass a different one -- see below.
+   */
+  notify?: (channel: string, payload: string) => Promise<unknown>,
 ): Promise<boolean> {
   const token = `probe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -57,7 +63,11 @@ export async function probeNotifyDelivery(
 
     const timer = setTimeout(() => settle(false), timeoutMs);
     connection.on('notification', onProbe);
-    void connection.query('select pg_notify($1, $2)', [PROBE_CHANNEL, token]).catch(() => settle(false));
+
+    const send = notify
+      ? notify(PROBE_CHANNEL, token)
+      : connection.query('select pg_notify($1, $2)', [PROBE_CHANNEL, token]);
+    void Promise.resolve(send).catch(() => settle(false));
   });
 }
 
@@ -73,6 +83,8 @@ export function createNotifyListener(
   logger: Logger,
   onDrop?: () => void,
   probeTimeoutMs = 3000,
+  /** Issues the probe NOTIFY from a separate connection; see the probe docs. */
+  notifyFrom?: (channel: string, payload: string) => Promise<unknown>,
 ): ChangeListener {
   let client: pg.Client | undefined;
   let stopped = false;
@@ -103,7 +115,7 @@ export function createNotifyListener(
         await connection.query(`listen ${channel}`);
       }
 
-      const delivered = await probeNotifyDelivery(connection, probeTimeoutMs);
+      const delivered = await probeNotifyDelivery(connection, probeTimeoutMs, notifyFrom);
 
       if (!delivered) {
         await connection.end().catch(() => {});
@@ -168,6 +180,11 @@ export async function createChangeListener(options: {
   disableNotify?: boolean;
   /** How long the delivery self-test waits before declaring notify unusable. */
   probeTimeoutMs?: number;
+  /**
+   * Issues the probe NOTIFY from a separate connection -- pass the application
+   * pool. Without it the probe only proves a session can notify itself.
+   */
+  notifyFrom?: (channel: string, payload: string) => Promise<unknown>;
 }): Promise<ChangeListener> {
   const {
     databaseUrl,
@@ -176,6 +193,7 @@ export async function createChangeListener(options: {
     onChange,
     disableNotify,
     probeTimeoutMs,
+    notifyFrom,
   } = options;
 
   let active: ChangeListener | undefined;
@@ -197,6 +215,7 @@ export async function createChangeListener(options: {
         logger,
         () => void fallBack('notify connection lost'),
         probeTimeoutMs,
+        notifyFrom,
       );
       await notify.start(onChange);
       active = notify;

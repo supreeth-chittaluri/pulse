@@ -408,6 +408,34 @@ describe.skipIf(skipReason !== null)('SSE endpoint', () => {
     stream.close();
   });
 
+  // A buffering proxy holds a response until its buffer fills, so a stream
+  // that emits a few hundred bytes an hour reaches the client as nothing at
+  // all. Observed in production behind Cloudflare: 40s, zero bytes, not even a
+  // heartbeat.
+  it('sends padding up front so a buffering proxy flushes', async () => {
+    let firstChunk = '';
+    const stream = await openRaw({}, (chunk) => {
+      if (!firstChunk) firstChunk = chunk;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    stream.close();
+
+    expect(firstChunk.startsWith(':')).toBe(true);
+    expect(firstChunk.length).toBeGreaterThan(2048);
+  });
+
+  it('reports how much history it replayed, so empty is distinguishable from broken', async () => {
+    await insertSignal('AAA');
+    let buffer = '';
+    const stream = await openRaw({}, (chunk) => (buffer += chunk));
+    await new Promise((r) => setTimeout(r, 300));
+    stream.close();
+
+    const ready = /^event: ready\ndata: (.+)$/m.exec(buffer);
+    expect(ready).not.toBeNull();
+    expect((JSON.parse(ready![1]!) as { backfilled: number }).backfilled).toBeGreaterThanOrEqual(0);
+  });
+
   it('sets headers that keep proxies from buffering or caching it', async () => {
     const stream = await openRaw();
     expect(stream.headers['cache-control']).toContain('no-cache');

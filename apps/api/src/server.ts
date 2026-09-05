@@ -15,6 +15,10 @@ const listener: ChangeListener = await createChangeListener({
   databaseUrl: config.databaseUrl,
   logger,
   onChange: () => hub.wake(),
+  // The probe notifies from the POOL, not from the listening connection --
+  // that is the path the real triggers take, and a self-notify probe passes on
+  // exactly the pooled setups it exists to catch.
+  notifyFrom: (channel, payload) => pool.query('select pg_notify($1, $2)', [channel, payload]),
 });
 
 const app = createApp({ config, pool, logger, hub, streamSource: listener.kind });
