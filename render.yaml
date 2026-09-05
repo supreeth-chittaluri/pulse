@@ -9,7 +9,12 @@ services:
     name: pulse
     runtime: node
     plan: free
-    region: oregon
+    # Must match the database's region. Every request that touches Postgres
+    # pays the round trip, and a cross-country pairing (Oregon service against
+    # a us-east-2 database) measured ~60-80ms per request on this project.
+    # Render region is immutable after creation -- changing it means recreating
+    # the service.
+    region: ohio
     buildCommand: npm ci --include=dev && npm run build:web && npm run db:migrate && npm run db:seed
     startCommand: npm run start:api
     healthCheckPath: /health
@@ -25,8 +30,10 @@ services:
       # Same origin serves the dashboard, so no CORS allowlist is needed.
       - key: CORS_ORIGINS
         value: ""
+      # Set this to a real address. The SEC requires a genuine contact on
+      # automated requests and the RSS sources expect one.
       - key: USER_AGENT
-        value: "pulse/0.1 (portfolio project; contact: you@example.com)"
+        sync: false
 
       # Generated once by Render and kept. A predictable signing key is a
       # complete auth bypass, and the app refuses to boot without one in
