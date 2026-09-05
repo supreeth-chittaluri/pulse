@@ -63,14 +63,16 @@ node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
 > Enabling it removes the free tier for that project entirely and every call
 > becomes billable from the first token.
 
-## 3. Seed the accounts
+## 3. Accounts
 
-Migrations run during build. Users do not — seeding needs a password that is not
-in the repository. From the Render shell, or locally against the Neon URL:
+Migrations **and seeding** both run during build, so the demo and admin accounts
+exist as soon as the first deploy finishes. Seeding is idempotent (it upserts),
+so it is safe on every deploy, and it reads the passwords from the environment
+rather than the repository.
 
-```bash
-npm run db:seed
-```
+If `ADMIN_USER_PASSWORD` is unset the build still succeeds and simply skips the
+admin account, logging that it did — the demo account is what the public link
+needs.
 
 ## 4. Keep it awake (optional but recommended)
 
@@ -125,6 +127,11 @@ one request.
 curl -s https://YOUR-URL/health
 curl -s -o /dev/null -w '%{http_code}\n' https://YOUR-URL/api/admin/watchlist   # expect 401
 ```
+
+`/health` reports `streamSource`: `notify` means live push is on
+`LISTEN/NOTIFY`, `poll` means it fell back — almost always because the pooled
+Neon URL is in use. It also reports `workerInProcess`, so you can confirm
+ingestion is actually running inside the web service.
 
 ---
 

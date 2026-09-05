@@ -10,10 +10,7 @@ services:
     runtime: node
     plan: free
     region: oregon
-    # --include=dev is required: NODE_ENV=production below makes npm ci omit
-    # devDependencies by default, which breaks the build (vite and typescript
-    # are devDependencies, not runtime dependencies).
-    buildCommand: npm ci --include=dev && npm run build:web && npm run db:migrate
+    buildCommand: npm ci --include=dev && npm run build:web && npm run db:migrate && npm run db:seed
     startCommand: npm run start:api
     healthCheckPath: /health
     envVars:

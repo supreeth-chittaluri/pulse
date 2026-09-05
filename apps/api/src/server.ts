@@ -17,7 +17,7 @@ const listener: ChangeListener = await createChangeListener({
   onChange: () => hub.wake(),
 });
 
-const app = createApp({ config, pool, logger, hub });
+const app = createApp({ config, pool, logger, hub, streamSource: listener.kind });
 
 const server = app.listen(config.port, () => {
   logger.info('api listening', {

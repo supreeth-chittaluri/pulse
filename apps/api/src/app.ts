@@ -21,6 +21,12 @@ export type AppDeps = {
   hub?: StreamHub;
   /** Overrides for the SSE endpoint. Tests shorten the heartbeat. */
   streamOptions?: Partial<Omit<StreamOptions, 'hub' | 'logger'>>;
+  /**
+   * Which change source the stream ended up on. Surfaced on /health because a
+   * pooled Postgres URL silently downgrades LISTEN/NOTIFY to polling, and that
+   * is otherwise invisible from outside the process.
+   */
+  streamSource?: 'notify' | 'poll';
 };
 
 export type PulseApp = Express & {
@@ -38,7 +44,14 @@ export type PulseApp = Express & {
  *              no extra data access; it exists for the M6 narrative.
  *   admin      writes, and anything that spends a finite resource.
  */
-export function createApp({ config, pool, logger, hub, streamOptions }: AppDeps): PulseApp {
+export function createApp({
+  config,
+  pool,
+  logger,
+  hub,
+  streamOptions,
+  streamSource,
+}: AppDeps): PulseApp {
   const app = express() as PulseApp;
   app.disable('x-powered-by');
 
@@ -94,6 +107,8 @@ export function createApp({ config, pool, logger, hub, streamOptions }: AppDeps)
       db,
       redditAdapter: config.redditOAuthEnabled ? 'reddit-oauth' : 'reddit-rss',
       scoringModel: config.gemini.model,
+      streamSource: streamSource ?? 'unknown',
+      workerInProcess: config.runWorkerInApi,
       sources: buildSources(config).length,
       uptimeSeconds: Math.round(process.uptime()),
     });
