@@ -6,6 +6,7 @@ import {
   selectStats,
   selectTickerSummaries,
   selectTickerTrend,
+  selectSignalsAfterId,
   type Pool,
 } from '@pulse/core';
 
@@ -26,6 +27,13 @@ const signalQuerySchema = z.object({
     .regex(/^[A-Z]{1,5}$/)
     .optional(),
   sinceHours: z.coerce.number().int().min(1).max(24 * 30).optional(),
+  /**
+   * Cursor for clients that poll instead of streaming. Returns only rows newer
+   * than this id, oldest first, so a poller can advance without re-reading or
+   * missing anything. Needed because a buffering reverse proxy makes SSE
+   * undeliverable -- see the transport note in the README.
+   */
+  afterId: z.coerce.number().int().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(50),
 });
 
@@ -56,7 +64,18 @@ export function publicRoutes(pool: Pool): Router {
       res.status(400).json({ error: 'bad_request', issues: parsed.error.issues });
       return;
     }
-    const { ticker, sinceHours, limit } = parsed.data;
+    const { ticker, sinceHours, afterId, limit } = parsed.data;
+
+    if (afterId !== undefined) {
+      const signals = await selectSignalsAfterId(pool, afterId, limit);
+      res.json({
+        signals,
+        // Echoed so a poller never has to derive its own cursor from the rows.
+        cursor: signals.length > 0 ? signals[signals.length - 1]!.id : afterId,
+      });
+      return;
+    }
+
     res.json({
       signals: await selectSignals(pool, {
         ticker,

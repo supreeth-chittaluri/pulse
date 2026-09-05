@@ -468,11 +468,31 @@ npm run worker -- score-once --limit 15
 Both tabs update with no refresh. That throwaway page is superseded by M6's
 dashboard; it exists so the acceptance criterion is demonstrable now.
 
-### SSE, not WebSocket
+### SSE, with a polling fallback that turned out to be mandatory
 
-The traffic is one-directional, so SSE wins on everything that matters here: it
-is plain HTTP (no upgrade for proxies and free-tier hosts to mishandle),
-`EventSource` reconnects on its own, and it needs no dependency.
+The traffic is one-directional, so SSE is the right primitive: plain HTTP, no
+upgrade to negotiate, `EventSource` reconnects on its own, no dependency.
+
+**It does not work behind every host.** A reverse proxy that buffers a response
+until it completes makes SSE undeliverable — the server writes events, the proxy
+holds every byte, and the browser sits on a connection that looks open forever.
+Measured on the Render deployment (Cloudflare in front), a response written in
+ten chunks 300ms apart arrived as one burst the instant it ended:
+
+```
+server wrote:      +0ms  +301ms  +602ms  …  +2706ms
+client received:   +0ms    +0ms    +0ms  …     +30ms   ← all at the end
+```
+
+`/api/stream/selftest` reproduces that in one request against any deployment.
+
+So the browser does not trust the connection opening. It waits for a real event
+and, if none arrives within 6s, switches to cursor-based polling of
+`/api/signals?afterId=` — which works anywhere, because each response completes.
+The masthead shows which transport is live (`live` versus `live (polled)`).
+
+That is the same shape as the two other fallbacks in this project: prefer the
+better mechanism, detect that it is not working, degrade instead of failing.
 
 ### Bridging two processes
 

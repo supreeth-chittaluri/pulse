@@ -102,6 +102,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   stats: () => request<Stats>('/api/stats'),
   signals: (limit = 40) => request<{ signals: Signal[] }>(`/api/signals?limit=${limit}`),
+  /** Cursor-based read for the polling transport; oldest-first after `afterId`. */
+  signalsAfter: (afterId: number, limit = 50) =>
+    request<{ signals: Signal[]; cursor: number }>(
+      `/api/signals?afterId=${afterId}&limit=${limit}`,
+    ),
   spikes: (limit = 10) => request<{ spikes: Spike[] }>(`/api/spikes?limit=${limit}`),
   tickers: (limit = 25) => request<{ tickers: TickerSummary[] }>(`/api/tickers?limit=${limit}`),
   ticker: (ticker: string, hours = 168) =>

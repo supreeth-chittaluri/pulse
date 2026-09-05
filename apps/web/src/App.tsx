@@ -111,11 +111,30 @@ export function App() {
           <p className="tagline">Sentiment spikes in US equities, from retail and news chatter</p>
         </div>
         <span className="spacer" />
-        <span className="status">
+        <span
+          className="status"
+          title={
+            connection === 'polling'
+              ? 'Live streaming is unavailable behind this host’s proxy, so updates are polled every 5s.'
+              : undefined
+          }
+        >
           <i
-            className={`dot ${connection === 'live' ? 'live' : connection === 'reconnecting' ? 'down' : ''}`}
+            className={`dot ${
+              connection === 'stream' || connection === 'polling'
+                ? 'live'
+                : connection === 'offline'
+                  ? 'down'
+                  : ''
+            }`}
           />
-          {connection === 'live' ? 'live' : connection === 'reconnecting' ? 'reconnecting' : 'connecting'}
+          {connection === 'stream'
+            ? 'live'
+            : connection === 'polling'
+              ? 'live (polled)'
+              : connection === 'offline'
+                ? 'offline'
+                : 'connecting'}
         </span>
         {role ? (
           <span className="row" style={{ gap: '0.5rem' }}>
