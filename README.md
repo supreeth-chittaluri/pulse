@@ -491,10 +491,15 @@ pooler can break it in the nastiest possible way: it accepts `LISTEN` without
 error and then never delivers, so the stream reports healthy and silently never
 fires.
 
-So the listener does not assume. At startup it sends itself a probe notification
-and falls back to 2s polling if it does not come back — and falls back again if
-the connection dies later. `/health` reports the result, alongside the serving
+So the listener does not assume. At startup it fires a probe notification
+**from the application pool** — the same path a real trigger takes — and falls
+back to 2s polling if it does not arrive, then falls back again if the
+connection later dies. `/health` reports the result, alongside the serving
 commit so you can tell a redeploy from a free-tier wake-up.
+
+The "from the pool" part is the whole trick: an earlier version notified on the
+listening connection itself, which a pooler permits, so it reported healthy on
+exactly the configuration it was written to catch.
 
 ### Correctness details
 

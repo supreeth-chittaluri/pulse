@@ -138,6 +138,30 @@ export function streamRoutes(options: StreamOptions): Router {
     logger.debug('stream connected', { ip, total: registry.total });
   });
 
+  /**
+   * Bounded streaming self-test.
+   *
+   * Distinguishes "the proxy in front of this app buffers streamed responses"
+   * from "the stream is broken", which look identical from a client: both give
+   * you nothing. Writes ten timestamped chunks 300ms apart and ends, so a
+   * caller can see whether bytes arrive progressively or all at once at the
+   * end. Public, read-only, bounded, and touches no database.
+   */
+  router.get('/selftest', async (_req, res) => {
+    res.status(200);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const started = Date.now();
+    for (let i = 0; i < 10; i += 1) {
+      res.write(`chunk ${i} at +${Date.now() - started}ms ${'.'.repeat(900)}\n`);
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    res.end(`done at +${Date.now() - started}ms\n`);
+  });
+
   router.get('/status', (_req, res) => {
     res.json({
       connections: registry.total,

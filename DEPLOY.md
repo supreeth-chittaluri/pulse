@@ -37,12 +37,17 @@ cookie rules, and the SSE stream is same-origin by construction.
 > falls back to 2s polling if it does not come back, so `/health` reports what
 > is actually working — `streamSource: "notify"` or `"poll"`.
 >
-> **Measured on this deployment (2026-09-05):** a Neon connection reported
-> `notify` with the probe active, so notifications round-trip there. An earlier
-> revision of this file claimed Neon's pooled endpoint could not support
-> `LISTEN/NOTIFY`; that was asserted rather than tested, and the probe
-> contradicts it. If you see `poll`, switch to the direct (non-`-pooler`)
-> connection string.
+> **Measured on this deployment (2026-09-05): the pooled endpoint does NOT
+> deliver.** `streamSource` reports `poll` against Neon's `-pooler` host, so
+> live push falls back to 2s polling. Use the direct (non-`-pooler`) connection
+> string.
+>
+> This took two attempts to establish. The first version of the probe sent its
+> NOTIFY on the same connection it was listening on, which a transaction-mode
+> pooler happily allows — so it reported `notify` on a setup that never
+> delivers a real trigger, and a revision of this file briefly recorded that
+> false result as fact. The probe now notifies from the application pool, which
+> is the path the triggers actually take.
 
 ## 2. Web service (Render)
 
