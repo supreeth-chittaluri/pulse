@@ -486,12 +486,15 @@ The notification payload is only a row id, and even that is just a wake-up: the
 hub keeps its own cursor and re-queries from it, so a notification dropped while
 nothing was listening is harmless rather than a permanently missed row.
 
-`LISTEN/NOTIFY` needs a dedicated non-pooled connection, and **Neon's pooled
-connection string does not support it** — which is exactly the URL a free-tier
-deploy is handed. So the listener falls back to polling automatically, both at
-startup and if the notify connection dies later. Two seconds of latency beats a
-stream that silently never fires. `/health` and the API startup log report which
-source is live.
+`LISTEN/NOTIFY` needs a dedicated, non-pooled connection, and a transaction-mode
+pooler can break it in the nastiest possible way: it accepts `LISTEN` without
+error and then never delivers, so the stream reports healthy and silently never
+fires.
+
+So the listener does not assume. At startup it sends itself a probe notification
+and falls back to 2s polling if it does not come back — and falls back again if
+the connection dies later. `/health` reports the result, alongside the serving
+commit so you can tell a redeploy from a free-tier wake-up.
 
 ### Correctness details
 

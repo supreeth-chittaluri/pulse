@@ -28,11 +28,21 @@ cookie rules, and the SSE stream is same-origin by construction.
 1. Create a project at [neon.tech](https://neon.tech) — free tier, no card.
 2. Copy the connection string.
 
-> **Take the DIRECT connection string, not the pooled one.** Neon's pooled
-> endpoint (pgBouncer) does not support `LISTEN/NOTIFY`, which is what pushes
-> live updates to connected browsers. pulse detects this and falls back to
-> polling every 2s rather than failing, so the pooled URL *works* — it is just
-> slower and does needless queries. `/health` reports which one is live.
+> **Check `/health` rather than assuming.** Live updates use `LISTEN/NOTIFY`,
+> which a transaction-mode connection pooler can break: it accepts `LISTEN`
+> without error and then never delivers, because the `NOTIFY` lands on a
+> different backend.
+>
+> pulse does not guess. At startup it sends itself a probe notification and
+> falls back to 2s polling if it does not come back, so `/health` reports what
+> is actually working — `streamSource: "notify"` or `"poll"`.
+>
+> **Measured on this deployment (2026-09-05):** a Neon connection reported
+> `notify` with the probe active, so notifications round-trip there. An earlier
+> revision of this file claimed Neon's pooled endpoint could not support
+> `LISTEN/NOTIFY`; that was asserted rather than tested, and the probe
+> contradicts it. If you see `poll`, switch to the direct (non-`-pooler`)
+> connection string.
 
 ## 2. Web service (Render)
 
@@ -128,10 +138,15 @@ curl -s https://YOUR-URL/health
 curl -s -o /dev/null -w '%{http_code}\n' https://YOUR-URL/api/admin/watchlist   # expect 401
 ```
 
-`/health` reports `streamSource`: `notify` means live push is on
-`LISTEN/NOTIFY`, `poll` means it fell back — almost always because the pooled
-Neon URL is in use. It also reports `workerInProcess`, so you can confirm
-ingestion is actually running inside the web service.
+`/health` reports:
+
+- `commit` — which build is actually serving. Render's free tier spins down, so
+  a reset uptime means either a redeploy or a wake-up; without this you cannot
+  tell, and every check against the live URL is a check against an unknown
+  build.
+- `streamSource` — `notify` or `poll`, established by an actual delivery probe
+  rather than by assuming a successful `LISTEN` means anything.
+- `workerInProcess` — whether ingestion is running inside the web service.
 
 ---
 
@@ -148,4 +163,6 @@ ingestion is actually running inside the web service.
 - **Ingestion shares a process with the API.** A crash in the ingestion loop is
   caught and logged so the dashboard stays up, but heavy ingestion competes with
   request handling on one free-tier CPU.
-- **Neon's pooled URL degrades live updates to polling** (see above).
+- **A transaction-mode pooler can degrade live updates to polling.** The
+  startup probe detects it and `/health` reports the truth; it is not silent
+  either way.
