@@ -196,7 +196,7 @@ async function run(
   }
 
   // The loops live in loops.ts so the API can run the same ones in-process;
-  // see DEPLOY.md for why a $0 deployment needs that.
+  // see docs/deployment.md for why a $0 deployment needs that.
   await runBackgroundLoops({ config, pool, logger, signal: controller.signal, sources });
   return 0;
 }

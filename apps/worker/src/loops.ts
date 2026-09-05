@@ -85,7 +85,7 @@ export type BackgroundOptions = {
  *
  * Shared by the standalone worker and by the API process. The API needs it
  * because free hosting tiers generally bill background workers but not web
- * services, so a $0 deployment has to run both in one process -- see DEPLOY.md.
+ * services, so a $0 deployment has to run both in one process -- see docs/deployment.md.
  */
 export async function runBackgroundLoops(options: BackgroundOptions): Promise<void> {
   const { config, pool, signal } = options;

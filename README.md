@@ -1,189 +1,113 @@
 # pulse
 
-**Finds the tickers people suddenly started talking about — and whether they're
-happy about it.**
+r/wallstreetbets mentions NVDA constantly. That is the background hum, not news.
+The thing worth knowing is when a ticker nobody discussed yesterday shows up
+forty times in an hour — and whether the mood around it just turned. Sentiment
+tools mostly cannot tell those apart, because they threshold on how positive a
+post reads rather than on how unusual it is for *that ticker*. pulse keeps a
+rolling baseline for every symbol it has seen and flags departures from that
+symbol's own normal, gating on volume before it trusts a mood swing: a sentiment
+reading built from two mentions is noise, and a surge with flat sentiment is
+usually just a press release. It does that at a **0.05–0.20% false-positive
+rate**, and answers "is there even a ticker here" with a regex and the SEC's
+symbol list before spending a single token — which is why **45% of ingested
+posts never reach the model at all**.
 
-[![tests](https://img.shields.io/badge/tests-247%20passing-1a7f37)](#testing)
-[![cost](https://img.shields.io/badge/running%20cost-%240-1a7f37)](#cost)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-2a78d6)](#stack)
-[![Node](https://img.shields.io/badge/Node-24-2a78d6)](#stack)
-[![Postgres](https://img.shields.io/badge/Postgres-17-2a78d6)](#stack)
-[![license](https://img.shields.io/badge/license-MIT-898781)](LICENSE)
+**[▶ Try it live](https://pulse-b8zd.onrender.com)** ·
+demo login `demo@pulse.local` / `demo-read-only`
 
-**[Live demo →](https://pulse-b8zd.onrender.com)**  ·  demo login
-`demo@pulse.local` / `demo-read-only` (read-only)
+<p>
+  <a href="https://pulse-b8zd.onrender.com"><img alt="live demo" src="https://img.shields.io/badge/demo-live-4ade80"></a>
+  <img alt="TypeScript 5.9" src="https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white">
+  <img alt="Node 24" src="https://img.shields.io/badge/Node-24-5fa04e?logo=nodedotjs&logoColor=white">
+  <img alt="PostgreSQL 17" src="https://img.shields.io/badge/PostgreSQL-17-336791?logo=postgresql&logoColor=white">
+  <img alt="React and Vite" src="https://img.shields.io/badge/React-Vite-61dafb?logo=react&logoColor=black">
+  <img alt="Gemini Flash Lite" src="https://img.shields.io/badge/Gemini-Flash_Lite-8e75b2?logo=googlegemini&logoColor=white">
+  <img alt="247 tests passing" src="https://img.shields.io/badge/tests-247%20passing-4ade80">
+  <img alt="running cost zero dollars" src="https://img.shields.io/badge/running%20cost-%240-4ade80">
+  <img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue">
+</p>
 
-> The demo runs on a free tier that sleeps after ~15 minutes without traffic, so
-> the first load may take up to a minute to wake. **A sleeping service also
-> ingests nothing** — observed directly while measuring, and the reason the
-> repo ships a keepalive workflow.
+<!-- Record a GIF of the live feed updating and save it to docs/images/demo.gif -->
+![The dashboard: new signals appear at the top of the live feed as they are scored, each tagged with its ticker and a signed sentiment score, while the trend chart shows sentiment and mention volume for the selected ticker](docs/images/demo.gif)
 
-<!-- TODO: replace with a recorded GIF of the live feed updating -->
-<p align="center"><em>(demo GIF goes here)</em></p>
+<sub>Live feed on the right, updating without a refresh. Sentiment is diverging
+blue/red around a zero baseline; mention volume sits beneath it on its own axis
+rather than sharing one.</sub>
 
----
-
-## The problem
-
-Sentiment on a ticker is only interesting **relative to its own normal**.
-
-r/stocks mentions AAPL constantly — that's background noise. r/stocks mentioning
-a small-cap forty times in an hour when it normally gets two is a signal. Most
-sentiment tools threshold on raw positivity and drown in the former.
-
-pulse maintains a rolling baseline per ticker and flags statistical deviations
-from it, gating on *how much* something is discussed before caring *how* it is
-discussed. A sentiment swing measured over two mentions is noise; a volume surge
-with flat sentiment is usually just a scheduled news cycle. The combination is
-the thing worth an alert.
-
-## What it does
-
-- **Ingests** five subreddits, Hacker News and per-ticker Google News on a
-  schedule, deduped so re-running changes nothing.
-- **Extracts tickers without the LLM** — a regex plus the SEC's listed-symbol
-  list proposes candidates, so ~45% of posts never reach the model at all.
-- **Scores sentiment** with Gemini Flash Lite behind a hard validation layer:
-  every numeric bound re-checked locally, hallucinated tickers dropped, and the
-  returned post ids required to match the ones sent.
-- **Detects spikes** with a rolling per-ticker z-score on both volume and
-  sentiment, measured at a **0.05–0.20% false-positive rate**.
-- **Pushes live** to the dashboard over SSE, with a polling fallback for hosts
-  that buffer streamed responses.
-- **Alerts by SMS** when a watchlisted ticker spikes, behind four independent
-  spend brakes.
-- **Serves a public dashboard** anyone can open with no login, with a read-only
-  demo account and an admin role for anything that spends a resource.
-
-## Measured
-
-Real numbers from real runs, not estimates:
-
-| | |
-|---|---|
-| Ingestion volume | **INGEST_RATE_PLACEHOLDER** |
-| Posts filtered before the model | **45%** (258 of 575) — free, deterministic |
-| Scoring throughput | 317 posts in **22 requests** (15 per batch) |
-| Scoring latency | **5.3s** mean per request · 386ms per post · max 8.2s |
-| Token cost | 62.8K in / 41.5K out for 317 posts |
-| Spike false-positive rate | **0.05–0.20%** over 2,000 simulated series per cell |
-| Spike detection at 5× volume | **98.7–100%** |
-| Update latency (SSE, local) | **108ms** median, insert → browser |
-| Live stream first event (production) | **148ms** from connect |
-| Update latency (polling fallback) | 5s interval |
-| Running cost | **$0** |
-
-Spike detector operating characteristics, at the default `z ≥ 3.0`:
-
-| Baseline rate | 1× (no spike) | 2× | 3× | 5× | 10× |
-|---|---:|---:|---:|---:|---:|
-| 4/hr | **0.05%** | 22.2% | 69.6% | 98.7% | 100% |
-| 10/hr | **0.20%** | 51.8% | 97.5% | 100% | 100% |
-| 25/hr | **0.15%** | 91.0% | 99.9% | 100% | 100% |
-
-The 1× column is the false-positive rate. Both bounds are pinned by tests — a
-detector that never fires also never false-positives, so asserting only one side
-would prove nothing.
-
-That 2× row is honest rather than flattering: a doubling at 4 mentions/hour is
-caught 22% of the time. On a Poisson process 4→8 genuinely is not
-distinguishable from luck. Volume buys confidence.
+> The demo runs on free tiers and sleeps after fifteen minutes idle, so the first
+> load may spend up to a minute waking the service. A sleeping service also
+> ingests nothing, which is why the repo ships a keepalive workflow.
 
 ## Stack
 
-| Layer | Choice |
-|---|---|
-| Language | TypeScript, npm workspaces monorepo |
-| Runtime | Node 24 — native type stripping, no build step server-side |
-| Database | Postgres 17 |
-| Ingestion | RSS/Atom + Reddit OAuth behind one `Source` interface |
-| Scoring | Gemini `gemini-3.5-flash-lite`, structured output + Zod validation |
-| API | Express 5 |
-| Dashboard | React 19 + Vite, no state library, served by the API |
-| Live updates | SSE with a cursor-based polling fallback |
-| Alerting | Twilio REST |
-| Tests | Vitest — 247, against real Postgres where the constraint *is* the logic |
-| Deploy | Neon + a single Render web service |
+**Backend:** TypeScript, Node 24, Express 5, PostgreSQL 17, Gemini Flash Lite, Twilio
+**Frontend:** TypeScript, React 19, Vite, hand-rolled SVG charts, Server-Sent Events
 
-## Running it
+## Features
 
-```bash
-cp .env.example .env      # defaults work for local development
-npm install
-npm run db:up             # Postgres 17 in Docker, host port 5433
-npm run db:migrate
-npm run db:seed
-```
+- **Spikes measured against each ticker's own history**, not a global threshold —
+  a small-cap going from two mentions an hour to forty registers, while NVDA's
+  constant chatter does not.
+- **Volume and sentiment are separate z-scores**, and only a surge that *also*
+  moves the mood earns an alert. A volume spike with flat sentiment is usually a
+  scheduled news cycle, and alerting on those is how a channel gets muted.
+- **The model never searches for tickers.** A regex plus the SEC's listed-symbol
+  list proposes candidates, so nearly half of all posts resolve for free and the
+  model only judges context and mood.
+- **Hard validation on model output** — every numeric bound re-checked locally,
+  invented tickers dropped, and the returned post ids required to match the ones
+  sent, so a batched response can never attach one post's sentiment to another.
+- **Live dashboard** that updates without a refresh, over SSE with a polling
+  fallback for hosts that buffer streamed responses.
+- **Per-ticker trend view** with sentiment and mention volume on separate
+  stacked axes — never a dual-axis chart.
+- **SMS alerts** on watchlisted tickers, behind four independent spend brakes: a
+  watchlist opt-in, a kind filter, a per-ticker cooldown, and a rolling daily
+  budget.
+- **Public by default, read-only demo account, admin for anything that spends** —
+  with a test that proves no anonymous route can reach a paid provider.
+- **Runs at $0.** Public RSS in, a free-tier model quota, free-tier hosting.
 
-```bash
-npm run worker -- run     # ingest + detect spikes, on a schedule
-```
+## Docs
 
-```bash
-npm run build:web && npm run start:api    # dashboard on :3000
-```
-
-Scoring is **on demand**, because it spends a finite daily quota:
-
-```bash
-npm run worker -- score-once --dry-run    # what it would send, and how much
-npm run worker -- score-once --limit 60
-```
-
-Full command list: `npm run worker -- --help`.
-
-## Testing
-
-```bash
-npm test          # needs `npm run db:up`; DB-backed tests skip loudly without it
-npm run typecheck
-```
-
-Database-backed tests run against a real throwaway Postgres rather than mocks,
-because in several places the constraint *is* the behaviour under test —
-mocking the unique index that prevents duplicate SMS would leave the guarantee
-untested.
-
-The abuse audit is a test rather than a checklist, since checklists get read
-once and then rot:
-
-```bash
-npx vitest run apps/api/src/abuse-audit.test.ts
-```
-
-It proves no anonymous or demo route can reach Gemini, Twilio, or an on-demand
-scrape — behaviourally (with `fetch` stubbed, on a *fully configured* instance)
-and structurally (the module graph from public routes never reaches the paid
-providers).
-
-## Cost
-
-**$0.** Ingestion is public RSS; scoring runs inside Gemini's free tier at
-roughly 20–40 requests/day against a 500/day allowance; hosting is Neon and
-Render free tiers. Twilio is the only component that would cost money and it
-stays off unless explicitly enabled.
-
-## Documentation
-
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how it works and why, including the
-  decisions that were measured rather than assumed
-- **[DEPLOY.md](DEPLOY.md)** — deploying to free tiers, and the limitations
-  that come with them
+[Architecture](docs/architecture.md) · [Measurements](docs/measurements.md) ·
+[HTTP API](docs/api.md) · [Running it locally](docs/development.md) ·
+[Deployment](docs/deployment.md)
 
 ## Status
 
-Built in nine milestones, M0 through M9. Two things are deliberately incomplete:
+Built across nine milestones. Two things are deliberately unfinished, and saying
+so is cheaper than implying otherwise:
 
-- **SMS alerting is verified to the provider boundary**, not through it. A
-  Twilio number is a recurring cost and this project otherwise runs at $0.
-  Message composition, retry policy, masked storage, the duplicate-send
-  constraint and all four spend brakes are tested against a fake notifier;
-  what is unexercised is one authenticated form POST.
-- **The scoring eval awaits hand labels.** `eval/labels.jsonl` holds 25
-  stratified posts and 48 ticker judgements. The model's own predictions are
-  excluded from that file on purpose — labels anchored on them would mostly
-  measure agreement with itself.
+**SMS alerting is verified to the provider boundary, not through it.** A Twilio
+number is a recurring cost and this project otherwise runs at $0. Message
+composition, the retry policy, masked storage, the duplicate-send constraint and
+all four spend brakes are tested against a fake notifier; what is unexercised is
+one authenticated form POST. Enabling it is a `.env` change.
 
-## License
+**The scoring eval awaits hand labels.** `eval/labels.jsonl` holds 25 stratified
+posts and 48 ticker judgements. The model's own predictions are excluded from
+that file on purpose — labels anchored on them would mostly measure the model
+agreeing with itself.
 
-MIT
+[Measurements](docs/measurements.md) also records two measurements that turned
+out to be **wrong**, and how they were caught, because an audit trail containing
+only successes is not an audit trail.
+
+## Licence and data
+
+The code is MIT — see [LICENSE](LICENSE).
+
+Ingested content is not redistributed. pulse stores post titles, short excerpts
+and links back to the source; no feed data ships in this repository. Sources are
+Reddit's public `.rss` endpoints, [hnrss.org](https://hnrss.org) and Google News
+RSS, each polled well inside its limits and identified by a `USER_AGENT`
+carrying a real contact address.
+
+The ticker allowlist in `config/tickers.json` derives from the SEC's public
+[`company_tickers.json`](https://www.sec.gov/files/company_tickers.json), a US
+government work not subject to copyright.
+
+Sentiment scores are produced by a language model and are wrong sometimes. This
+is a portfolio project, not investment advice.

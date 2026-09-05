@@ -2,7 +2,7 @@
 #
 # One web service, because Render's free tier covers web services but not
 # background workers -- so ingestion and spike detection run inside the API
-# process (RUN_WORKER_IN_API). See DEPLOY.md for the tradeoffs, especially the
+# process (RUN_WORKER_IN_API). See docs/deployment.md for the tradeoffs, especially the
 # free-tier spin-down.
 services:
   - type: web
