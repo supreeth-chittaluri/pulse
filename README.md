@@ -23,21 +23,21 @@ demo login `demo@pulse.local` / `demo-read-only`
   <img alt="PostgreSQL 17" src="https://img.shields.io/badge/PostgreSQL-17-336791?logo=postgresql&logoColor=white">
   <img alt="React and Vite" src="https://img.shields.io/badge/React-Vite-61dafb?logo=react&logoColor=black">
   <img alt="Gemini Flash Lite" src="https://img.shields.io/badge/Gemini-Flash_Lite-8e75b2?logo=googlegemini&logoColor=white">
-  <img alt="248 tests passing" src="https://img.shields.io/badge/tests-248%20passing-4ade80">
+  <img alt="262 tests passing" src="https://img.shields.io/badge/tests-262%20passing-4ade80">
   <img alt="running cost zero dollars" src="https://img.shields.io/badge/running%20cost-%240-4ade80">
   <img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
 
-![Selecting NVDA draws a week of sentiment and mention volume; hovering the chart reads off a single hour; then a scoring run lands and new signals stream into the live feed without a refresh](docs/images/demo.gif)
+![Sorting and filtering the ticker table, opening NVDA to a week of sentiment over mention volume, reading one hour off the chart, then triggering a real scoring run that streams new signals into the live feed](docs/images/demo.gif)
 
-<sub>NVDA over seven days — sentiment as a diverging line around zero, mention
-volume beneath it on its own axis. Then a real scoring run: the signals arriving
-in the feed are model output, not a mock. One post about Fannie Mae approving
-VantageScore produced three of them — <strong>TRU</strong>,
-<strong>EFX</strong> and <strong>FICO −0.90</strong>, the last being the company
-actually losing its monopoly.</sub>
+<sub>Every symbol carries a 24-hour sparkline, so eight mentions spread over a
+day reads differently from eight in one hour. Opening NVDA draws seven days of
+sentiment above mention volume on <strong>stacked axes, never a dual axis</strong>;
+hovering reads off a single hour. Then a real scoring run — the signal count and
+the feed at the end are model output landing over the live connection, not a
+mock.</sub>
 
-<img src="docs/images/mobile.png" alt="The same dashboard on a phone: stat tiles stack two-up, the trend chart fits the viewport, and the ticker table scrolls inside its own box" width="280">
+<img src="docs/images/mobile.png" alt="The same ticker view on a phone: the nav collapses to an icon strip, the metrics stack, and the chart fits a 390px viewport" width="280">
 
 > The demo runs on free tiers and sleeps after fifteen minutes idle, so the first
 > load may spend up to a minute waking the service. A sleeping service also
@@ -62,10 +62,17 @@ actually losing its monopoly.</sub>
 - **Hard validation on model output** — every numeric bound re-checked locally,
   invented tickers dropped, and the returned post ids required to match the ones
   sent, so a batched response can never attach one post's sentiment to another.
-- **Live dashboard** that updates without a refresh, over SSE with a polling
+- **A dashboard you can actually use** — sortable and filterable ticker tables
+  with per-symbol sparklines, a detail view per ticker, and a spikes log, all
+  linkable by URL.
+- **Live updates without a refresh**, over SSE with a cursor-based polling
   fallback for hosts that buffer streamed responses.
 - **Per-ticker trend view** with sentiment and mention volume on separate
-  stacked axes — never a dual-axis chart.
+  stacked axes — never a dual-axis chart, and sentiment fixed to the full
+  −1..+1 range so a trivial wobble cannot be rescaled into a crisis.
+- **One post can produce several signals.** A story about Fannie Mae approving
+  VantageScore scored **TRU −0.40**, **EFX −0.40** and **FICO −0.90** — the last
+  being the company actually losing its monopoly.
 - **SMS alerts** on watchlisted tickers, behind four independent spend brakes: a
   watchlist opt-in, a kind filter, a per-ticker cooldown, and a rolling daily
   budget.

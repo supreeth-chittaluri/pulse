@@ -215,8 +215,12 @@ could race.
   paid worker.
 - **No ORM.** The queries are the interesting part; hiding them behind a
   builder would obscure the indexes they depend on.
-- **No state library in the frontend.** The data model is small and the
-  transport pushes it.
+- **No state library and no router package in the frontend.** The data model is
+  small and the transport pushes it, so shared state is one `App` holding
+  signals, spikes and ticker summaries. Routing is a hash and a switch: the
+  same Express process serves the API and these static files, and a
+  history-mode catch-all rewrite that gets it slightly wrong breaks `/api`
+  rather than the page.
 - **No background worker service in production.** Free tiers bill workers but
   not web services, so ingestion runs inside the API process. Locally the
   standalone worker is still preferred — it restarts independently.

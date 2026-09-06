@@ -158,7 +158,7 @@ match the database region; Render's is immutable after creation.
 
 | | |
 |---|---|
-| Tests | **248** across 18 files |
+| Tests | **262** across 20 files |
 | Database-backed | Real throwaway Postgres, not mocks |
 | Simulated trials in the detector suite | ~5,200 per run |
 

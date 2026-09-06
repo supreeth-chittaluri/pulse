@@ -169,6 +169,10 @@ body {
   .nav a { padding: 0.45rem 0.55rem; }
   .sidebar-foot { margin-top: 0; padding-top: 0; flex-direction: row; margin-left: auto; }
   .sidebar-foot .side-note { display: none; }
+  /* The full label plus its counts does not fit the mobile strip, and letting
+     it overflow puts the primary action half off-screen. */
+  .sidebar-foot a.side-note, .sidebar-foot > div > a { display: none; }
+  .sidebar-foot button { padding: 0.3rem 0.6rem; font-size: 12px; }
   .page-sub { display: none; }
   .page-title { font-size: 15px; }
   .card-head { flex-wrap: wrap; }
