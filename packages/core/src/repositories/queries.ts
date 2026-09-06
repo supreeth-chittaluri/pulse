@@ -71,7 +71,16 @@ export type TickerSummary = {
   lastSeenAt: Date;
   baselineAvgSentiment: number | null;
   baselineAvgVolume: number | null;
+  /**
+   * Hourly mention counts for the last 24h, oldest first, zero-filled.
+   *
+   * Returned with the list so a table of 25 tickers can draw 25 sparklines from
+   * one query instead of 25 round trips.
+   */
+  series: number[];
 };
+
+const SPARK_HOURS = 24;
 
 export async function selectTickerSummaries(
   pool: Pool,
@@ -84,20 +93,55 @@ export async function selectTickerSummaries(
     last_seen_at: Date;
     rolling_avg: number | null;
     rolling_avg_volume: number | null;
+    series: string[] | null;
   }>(
-    `select s.ticker_or_topic,
-            count(*)                as mentions,
-            avg(s.sentiment_score)  as avg_sentiment,
-            max(coalesce(p.posted_at, p.scraped_at)) as last_seen_at,
+    `with observed as (
+       select s.ticker_or_topic,
+              s.sentiment_score,
+              coalesce(p.posted_at, p.scraped_at) as observed_at
+         from signals s
+         join posts p on p.id = s.post_id
+     ),
+     summary as (
+       select ticker_or_topic,
+              count(*)             as mentions,
+              avg(sentiment_score) as avg_sentiment,
+              max(observed_at)     as last_seen_at
+         from observed
+        group by ticker_or_topic
+        order by count(*) desc
+        limit $1
+     ),
+     hours as (
+       select generate_series(
+         date_trunc('hour', now()) - make_interval(hours => $2 - 1),
+         date_trunc('hour', now()),
+         interval '1 hour'
+       ) as bucket
+     ),
+     hourly as (
+       select ticker_or_topic, date_trunc('hour', observed_at) as bucket, count(*) as n
+         from observed
+        where observed_at >= date_trunc('hour', now()) - make_interval(hours => $2 - 1)
+        group by 1, 2
+     )
+     select su.ticker_or_topic,
+            su.mentions,
+            su.avg_sentiment,
+            su.last_seen_at,
             b.rolling_avg,
-            b.rolling_avg_volume
-       from signals s
-       join posts p on p.id = s.post_id
-       left join baselines b on b.ticker_or_topic = s.ticker_or_topic
-      group by s.ticker_or_topic, b.rolling_avg, b.rolling_avg_volume
-      order by count(*) desc
-      limit $1`,
-    [limit],
+            b.rolling_avg_volume,
+            -- Zero-filled so a sparkline shows real gaps rather than silently
+            -- closing them up, and so every series has the same length.
+            (select array_agg(coalesce(h.n, 0) order by hours.bucket)
+               from hours
+               left join hourly h
+                 on h.bucket = hours.bucket
+                and h.ticker_or_topic = su.ticker_or_topic) as series
+       from summary su
+       left join baselines b on b.ticker_or_topic = su.ticker_or_topic
+      order by su.mentions desc`,
+    [limit, SPARK_HOURS],
   );
 
   return rows.map((row) => ({
@@ -107,6 +151,7 @@ export async function selectTickerSummaries(
     lastSeenAt: row.last_seen_at,
     baselineAvgSentiment: row.rolling_avg,
     baselineAvgVolume: row.rolling_avg_volume,
+    series: (row.series ?? []).map(Number),
   }));
 }
 
