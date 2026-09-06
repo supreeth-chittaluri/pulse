@@ -31,9 +31,9 @@ measured rather than assumed, the measurement is here too.
       └─────────────┘                           └─────────────┘
 ```
 
-Four workspace packages (`core`, `sources`, `scoring`, `analysis`, `alerting`)
-and two apps (`api`, `web`). TypeScript throughout, run directly by Node's
-native type stripping — no build step outside the browser bundle.
+Five workspace packages (`core`, `sources`, `scoring`, `analysis`, `alerting`)
+and three apps (`api`, `web`, `worker`). TypeScript throughout, run directly by
+Node's native type stripping — no build step outside the browser bundle.
 
 ---
 

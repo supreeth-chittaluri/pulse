@@ -16,7 +16,7 @@ there is no CORS hop.
 | `GET /api/signals` | Recent signals. `?ticker=` `?sinceHours=` `?limit=` (max 200) |
 | `GET /api/signals?afterId=` | Cursor read, oldest-first, for polling clients. Echoes the next cursor |
 | `GET /api/spikes` | Recent detections with their z-scores and baselines |
-| `GET /api/tickers` | Ranked by mentions, with average sentiment and baseline |
+| `GET /api/tickers` | Ranked by mentions, with average sentiment, baseline, and a 24h sparkline |
 | `GET /api/tickers/:ticker` | Hourly trend series plus recent signals for one ticker |
 | `GET /api/stream` | Server-Sent Events: `ready`, `signal`, `spike` |
 | `GET /api/stream/status` | Live connection count and hub cursor |
@@ -68,6 +68,19 @@ active it returns `409 scoring_in_progress`.
 Signal objects expose `observedAt`, the source post's publication time (falling
 back to ingestion time), so scoring an old backlog does not make old posts look
 new.
+
+## Response shapes worth calling out
+
+`GET /api/tickers` returns a `series` on every row: 24 hourly mention counts,
+oldest first, **zero-filled**. A gap in the data is a real quiet hour and has to
+be drawn as one — dropping empty buckets would produce a line implying
+continuous chatter. The series is computed in the same query as the summary, so
+100 tickers is one round trip rather than 101.
+
+`baselineAvgVolume` and `baselineAvgSentiment` are `null` until a ticker has
+enough history for a baseline to exist. Clients should render that absence
+rather than substituting zero: a missing baseline and a baseline of zero mean
+opposite things.
 
 ## Live stream
 

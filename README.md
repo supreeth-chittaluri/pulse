@@ -46,7 +46,7 @@ mock.</sub>
 ## Stack
 
 **Backend:** TypeScript, Node 24, Express 5, PostgreSQL 17, Gemini Flash Lite, Twilio
-**Frontend:** TypeScript, React 19, Vite, hand-rolled SVG charts, Server-Sent Events
+**Frontend:** TypeScript, React 19, Vite, hand-rolled SVG charts, hash routing, Server-Sent Events
 
 ## Features
 
