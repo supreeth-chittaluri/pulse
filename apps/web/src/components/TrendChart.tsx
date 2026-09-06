@@ -35,7 +35,7 @@ export function TrendChart({ points, hours }: { points: TrendPoint[]; hours: num
   }, []);
 
   const layout = useMemo(() => {
-    const padding = { left: 38, right: 12, top: 10, bottom: 20 };
+    const padding = { left: 38, right: 12, top: 20, bottom: 20 };
     const sentimentHeight = 122;
     const gap = 26;
     const volumeHeight = 62;
@@ -250,6 +250,26 @@ export function TrendChart({ points, hours }: { points: TrendPoint[]; hours: num
         />
         <text x={padding.left - 7} y={volumeTop + 8} textAnchor="end" fontSize={10} fill="var(--ink-muted)">
           {maxMentions}
+        </text>
+        <text
+          x={padding.left - 7}
+          y={volumeTop + volumeHeight + 3.5}
+          textAnchor="end"
+          fontSize={10}
+          fill="var(--ink-muted)"
+        >
+          0
+        </text>
+
+        {/* Each plot is named on the plot, so a screenshot of the chart alone
+            still says which measure is which. */}
+        <text x={padding.left} y={padding.top - 1} fontSize={9.5} fill="var(--ink-muted)"
+              letterSpacing="0.05em">
+          SENTIMENT
+        </text>
+        <text x={padding.left} y={volumeTop - 5} fontSize={9.5} fill="var(--ink-muted)"
+              letterSpacing="0.05em">
+          MENTIONS / HOUR
         </text>
 
         {ticks.map((tick) => (

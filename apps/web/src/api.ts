@@ -33,6 +33,8 @@ export type TickerSummary = {
   lastSeenAt: string;
   baselineAvgSentiment: number | null;
   baselineAvgVolume: number | null;
+  /** Hourly mention counts for the last 24h, oldest first, zero-filled. */
+  series: number[];
 };
 
 export type TrendPoint = { bucket: string; mentions: number; avgSentiment: number };
@@ -216,6 +218,11 @@ export function sentimentColor(score: number): string {
   return 'var(--ink-muted)';
 }
 
+/** Translucent fill of the sentiment hue, for chips and bars. */
+export function sentimentTint(score: number, percent = 14): string {
+  return `color-mix(in srgb, ${sentimentColor(score)} ${percent}%, transparent)`;
+}
+
 export function formatScore(score: number): string {
   return `${score > 0 ? '+' : score < 0 ? '−' : ''}${Math.abs(score).toFixed(2)}`;
 }
@@ -226,4 +233,14 @@ export function timeAgo(iso: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+/** Absolute local time, for rows where the reader needs a wall clock. */
+export function formatTime(iso: string): string {
+  return new Date(iso).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
